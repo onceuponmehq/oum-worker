@@ -77,9 +77,6 @@ def discover_by_prompt(cwd: Path, prompt: str, *, created_at: str,
         return None
     candidates.sort()
     best_delta, best_sid = candidates[0]
-    if len(candidates) > 1:
-        second_delta = candidates[1][0]
-        # Ambiguous: both top candidates are within the tiebreaker window of each other
-        if second_delta - best_delta < tiebreaker_window_seconds:
-            return None
+    if best_delta > tiebreaker_window_seconds and len(candidates) > 1:
+        return None  # ambiguous
     return best_sid

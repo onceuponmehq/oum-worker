@@ -78,9 +78,45 @@ def test_discover_by_prompt_uses_mtime_tiebreaker(tmp_path, monkeypatch):
     sid_old.write_text(line); sid_new.write_text(line)
     # Set mtimes: sid_old far away, sid_new very close to created_at
     import os as _os
-    _os.utime(sid_old, (1700000000, 1700000000))           # ancient
-    _os.utime(sid_new, (1746524400, 1746524400))           # close to 2026-05-06T10:00:00 UTC
+    # 2026-05-06T10:00:00Z = 1778061600 unix. sid_new ~1s away, sid_old ancient (Nov 2023).
+    _os.utime(sid_old, (1700000000, 1700000000))
+    _os.utime(sid_new, (1778061601, 1778061601))
     monkeypatch.setenv("HOME", str(fake_home))
 
     found = jsonl.discover_by_prompt(Path("/x"), "hi", created_at="2026-05-06T10:00:00.000Z")
     assert found == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+
+def test_discover_by_prompt_returns_none_when_all_candidates_outside_window(tmp_path, monkeypatch):
+    """If multiple sessions match the prompt but none are within 300s of created_at,
+    refuse to guess (return None) — caller must pass --session-id explicitly."""
+    fake_home = tmp_path / "home"
+    proj = fake_home / ".claude" / "projects" / jsonl.encode_cwd(Path("/x"))
+    proj.mkdir(parents=True)
+    sid_a = proj / "11111111-1111-1111-1111-111111111111.jsonl"
+    sid_b = proj / "22222222-2222-2222-2222-222222222222.jsonl"
+    line = '{"type":"user","timestamp":"2026-05-06T10:00:00.000Z","message":{"role":"user","content":"hi"}}\n'
+    sid_a.write_text(line); sid_b.write_text(line)
+    import os as _os
+    # Both files: ancient mtimes, far outside 300s window
+    _os.utime(sid_a, (1700000000, 1700000000))
+    _os.utime(sid_b, (1700000100, 1700000100))
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    found = jsonl.discover_by_prompt(Path("/x"), "hi", created_at="2026-05-06T10:00:00.000Z")
+    assert found is None
+
+
+def test_discover_by_prompt_returns_only_match_even_outside_window(tmp_path, monkeypatch):
+    """Single candidate outside the 300s window still returns it — only ambiguity matters."""
+    fake_home = tmp_path / "home"
+    proj = fake_home / ".claude" / "projects" / jsonl.encode_cwd(Path("/x"))
+    proj.mkdir(parents=True)
+    sid = proj / "33333333-3333-3333-3333-333333333333.jsonl"
+    sid.write_text('{"type":"user","timestamp":"2026-05-06T10:00:00.000Z","message":{"role":"user","content":"hi"}}\n')
+    import os as _os
+    _os.utime(sid, (1700000000, 1700000000))  # ancient, outside window
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    found = jsonl.discover_by_prompt(Path("/x"), "hi", created_at="2026-05-06T10:00:00.000Z")
+    assert found == "33333333-3333-3333-3333-333333333333"
