@@ -25,3 +25,61 @@ def projects_dir() -> Path:
 def find_by_session_id(cwd: Path, session_id: str) -> Optional[Path]:
     p = projects_dir() / encode_cwd(cwd) / f"{session_id}.jsonl"
     return p if p.exists() else None
+
+
+def _parse_iso_utc(s: str) -> datetime:
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    return datetime.fromisoformat(s).astimezone(timezone.utc)
+
+
+def _first_user_message(jsonl_path: Path) -> Optional[str]:
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if d.get("type") != "user":
+                continue
+            msg = d.get("message", {})
+            content = msg.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                texts = [b.get("text", "") for b in content if b.get("type") == "text"]
+                if texts:
+                    return "\n".join(texts)
+    return None
+
+
+def discover_by_prompt(cwd: Path, prompt: str, *, created_at: str,
+                       tiebreaker_window_seconds: int = 300) -> Optional[str]:
+    """Find session-id whose first user message matches `prompt`.
+
+    `created_at` is the worker's state.json:created_at (UTC ISO 8601 with Z).
+    If multiple sessions match, prefer the one whose mtime is closest to
+    `created_at` and within `tiebreaker_window_seconds`.
+    """
+    pdir = projects_dir() / encode_cwd(cwd)
+    if not pdir.exists():
+        return None
+    target = prompt.strip()
+    target_dt = _parse_iso_utc(created_at)
+    candidates: list[tuple[float, str]] = []
+    for f in pdir.glob("*.jsonl"):
+        first = _first_user_message(f)
+        if first is None or first.strip() != target:
+            continue
+        delta = abs(f.stat().st_mtime - target_dt.timestamp())
+        candidates.append((delta, f.stem))
+    if not candidates:
+        return None
+    candidates.sort()
+    best_delta, best_sid = candidates[0]
+    if len(candidates) > 1:
+        second_delta = candidates[1][0]
+        # Ambiguous: both top candidates are within the tiebreaker window of each other
+        if second_delta - best_delta < tiebreaker_window_seconds:
+            return None
+    return best_sid
