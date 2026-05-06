@@ -42,9 +42,13 @@ def ensure_session(session: str, *, width: int = 220, height: int = 50) -> None:
     if r.returncode == 0:
         return
     _run("new-session", "-d", "-s", session, "-x", str(width), "-y", str(height), check=True)
-    # remain-on-exit applied at session-default level so new windows inherit
-    # before their command runs — closes a race for fast-exiting commands.
-    _run("set-window-option", "-t", session, "-g", "remain-on-exit", "on")
+    # Session-scoped hook fires after every new window in this session and
+    # applies remain-on-exit on the freshly-created window. This avoids the
+    # race where a fast-exit command finishes before a separate setw call lands.
+    # `set-hook -t session` is per-session, unlike `set-window-option -g`
+    # which would be server-wide and leak to unrelated sessions.
+    _run("set-hook", "-t", session, "after-new-window",
+         "set-window-option remain-on-exit on", check=True)
 
 
 def window_exists(session: str, window: str) -> bool:
