@@ -108,3 +108,57 @@ def resolve_workdir(*, repo: Optional[str], cwd: Optional[str]) -> Path:
     if cwd:
         return Path(cwd).expanduser().resolve()
     return ROOT
+
+
+import os
+import plistlib
+import subprocess
+
+
+def build_plist(*, label: str, cwd: Path, command: str, target: datetime,
+                stdout_path: Path, stderr_path: Path) -> bytes:
+    plist = {
+        "Label": label,
+        "WorkingDirectory": "/tmp",
+        "ProgramArguments": ["/bin/zsh", "-lic", command],
+        "EnvironmentVariables": {
+            "TZ": "Asia/Kolkata",
+            "PATH": DEFAULT_PATH,
+            "LANG": "en_US.UTF-8",
+        },
+        "StartCalendarInterval": {
+            "Month": target.month,
+            "Day": target.day,
+            "Hour": target.hour,
+            "Minute": target.minute,
+        },
+        "StandardOutPath": str(stdout_path),
+        "StandardErrorPath": str(stderr_path),
+        "RunAtLoad": False,
+        "LaunchOnlyOnce": True,
+        "AbandonProcessGroup": True,
+    }
+    return plistlib.dumps(plist, sort_keys=False)
+
+
+def write_plist(path: Path, payload: bytes, *, replace: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not replace:
+        raise FileExistsError(f"{path} already exists; pass replace=True")
+    path.write_bytes(payload)
+    path.chmod(0o644)
+
+
+def bootstrap(label: str, plist_path: Path, *, replace: bool) -> None:
+    uid = os.getuid()
+    if replace:
+        subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"],
+                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)], check=True)
+    subprocess.run(["launchctl", "enable", f"gui/{uid}/{label}"], check=True)
+
+
+def unbootstrap(label: str) -> None:
+    uid = os.getuid()
+    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"],
+                   check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

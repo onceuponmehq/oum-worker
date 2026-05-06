@@ -48,3 +48,31 @@ def test_resolve_workdir_known_alias(tmp_path):
     """Known repo aliases resolve to the OUM monorepo paths."""
     p = launchd.resolve_workdir(repo="oum-os", cwd=None)
     assert p.name == "oum-os"
+
+
+import plistlib
+
+
+def test_build_plist_contains_calendar_interval(tmp_path):
+    target = datetime(2026, 5, 6, 17, 30, tzinfo=IST)
+    payload = launchd.build_plist(
+        label="com.oum.schedule.demo",
+        cwd=tmp_path,
+        command="echo hi",
+        target=target,
+        stdout_path=tmp_path / "o", stderr_path=tmp_path / "e",
+    )
+    parsed = plistlib.loads(payload)
+    assert parsed["Label"] == "com.oum.schedule.demo"
+    assert parsed["StartCalendarInterval"]["Hour"] == 17
+    assert parsed["StartCalendarInterval"]["Minute"] == 30
+    assert parsed["LaunchOnlyOnce"] is True
+    assert parsed["AbandonProcessGroup"] is True
+
+
+def test_write_plist_refuses_overwrite_without_replace(tmp_path):
+    p = tmp_path / "x.plist"
+    launchd.write_plist(p, b"<plist></plist>", replace=False)
+    with pytest.raises(FileExistsError):
+        launchd.write_plist(p, b"<plist></plist>", replace=False)
+    launchd.write_plist(p, b"<plist></plist>", replace=True)  # no error
