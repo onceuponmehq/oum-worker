@@ -25,6 +25,9 @@ classifiers = [
   "Topic :: System :: Systems Administration"
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
 [project.urls]
 Homepage = "https://github.com/onceuponmehq/oum-worker"
 Issues = "https://github.com/onceuponmehq/oum-worker/issues"
