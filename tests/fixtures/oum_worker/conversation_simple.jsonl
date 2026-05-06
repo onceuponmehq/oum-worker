@@ -1,0 +1,6 @@
+{"type":"user","timestamp":"2026-05-06T10:31:18.283Z","message":{"role":"user","content":"hi"}}
+{"type":"assistant","timestamp":"2026-05-06T10:31:23.247Z","message":{"role":"assistant","id":"msg_01A","content":[{"type":"thinking","thinking":""}],"stop_reason":"end_turn"}}
+{"type":"assistant","timestamp":"2026-05-06T10:31:25.191Z","message":{"role":"assistant","id":"msg_01A","content":[{"type":"text","text":"Hi! Ready when you are."}],"stop_reason":"end_turn"}}
+{"type":"user","timestamp":"2026-05-06T10:36:04.309Z","message":{"role":"user","content":"how are you?"}}
+{"type":"assistant","timestamp":"2026-05-06T10:36:08.270Z","message":{"role":"assistant","id":"msg_01B","content":[{"type":"thinking","thinking":""}],"stop_reason":"end_turn"}}
+{"type":"assistant","timestamp":"2026-05-06T10:36:08.425Z","message":{"role":"assistant","id":"msg_01B","content":[{"type":"text","text":"Doing well, thanks. Ready to help."}],"stop_reason":"end_turn"}}
