@@ -195,3 +195,27 @@ def extract_response(jsonl_path: Path, *, since: str,
                     if b.get("type") == "tool_result":
                         parts.append("[tool_result]")
     return "".join(parts).strip()
+
+
+def dump_events(jsonl_path: Path, *, since: str) -> str:
+    """Return raw JSONL events with timestamp > since, one object per line.
+
+    Used by `oum-worker capture --full` for orchestrators that want the full
+    trace (thinking, tool_use, tool_result, plus assistant text) instead of
+    just the rendered text.
+    """
+    if not jsonl_path.exists():
+        return ""
+    since_dt = _parse_iso_utc(since)
+    out_lines: list[str] = []
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = d.get("timestamp")
+            if not ts or _parse_iso_utc(ts) <= since_dt:
+                continue
+            out_lines.append(line.rstrip("\n"))
+    return "\n".join(out_lines)

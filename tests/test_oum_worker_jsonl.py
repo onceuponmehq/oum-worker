@@ -171,3 +171,22 @@ def test_extract_response_include_tool_use(tmp_path):
     out = jsonl.extract_response(src, since="2026-05-06T10:59:00.000Z", include_tool_use=True)
     assert "Read" in out  # tool name surfaced
     assert "File checked" in out
+
+
+def test_dump_events_returns_raw_jsonl_after_since(tmp_path):
+    src = FIXTURES / "conversation_with_tools.jsonl"
+    target = tmp_path / "session.jsonl"
+    target.write_text(src.read_text())
+    out = jsonl.dump_events(target, since="2026-05-06T11:00:02.500Z")
+    lines = out.splitlines()
+    # Lines included: tool_result user (11:00:03), assistant text (11:00:04).
+    assert len(lines) == 2
+    assert "tool_result" in out
+    assert "File checked, all good." in out
+    # Excluded: lines 1-3 (initial user, thinking, tool_use call).
+    assert "msg_T1" not in out
+    assert "11:00:00" not in out
+
+
+def test_dump_events_returns_empty_when_file_missing(tmp_path):
+    assert jsonl.dump_events(tmp_path / "missing.jsonl", since="2026-05-06T10:00:00.000Z") == ""

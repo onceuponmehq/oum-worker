@@ -1,7 +1,11 @@
 """launchd plist builders + time parsing, lifted from scripts/oum_schedule.py."""
 from __future__ import annotations
 
+import os
+import plistlib
 import re
+import shlex
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -9,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[2]   # repo root
+SCRIPTS_DIR = ROOT / "scripts"
 IST = ZoneInfo("Asia/Kolkata")
 DEFAULT_PATH = "/Users/tushar/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -110,11 +115,6 @@ def resolve_workdir(*, repo: Optional[str], cwd: Optional[str]) -> Path:
     return ROOT
 
 
-import os
-import plistlib
-import subprocess
-
-
 def build_plist(*, label: str, cwd: Path, command: str, target: datetime,
                 stdout_path: Path, stderr_path: Path) -> bytes:
     plist = {
@@ -164,15 +164,12 @@ def unbootstrap(label: str) -> None:
                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-import shlex
-
-
 def _cc_invocation(*, claude_bin: str, resume: Optional[str], new_session: bool,
                    session_name: Optional[str], permission_mode: Optional[str],
                    skip_permissions: bool, prompt_file: Path, headless: bool) -> str:
-    parts: list[str] = [claude_bin]
-    if headless:
-        parts = ["claude", "-p"]
+    # Headless mode honors --cc-command but appends -p as the headless flag
+    # (Claude Code's headless invocation is always `<bin> -p ...`).
+    parts: list[str] = [claude_bin] + (["-p"] if headless else [])
     if resume:
         parts.extend(["--resume", shlex.quote(resume)])
     if new_session and session_name and not headless:
@@ -199,7 +196,11 @@ def build_inner_command(*, cwd: Path, claude_bin: str, prompt_file: Path,
     3a. interactive: open a tmux window running cc.
     3b. headless:    run `claude -p ...` with stdout to <logs_dir>/<label>/response.txt.
     """
+    # PYTHONPATH lets `python3 -m oum_worker.runner` resolve from any cwd —
+    # without it, the launchd inner command would die with ModuleNotFoundError
+    # because we cd into the worker's cwd before running this.
     mark = (
+        f"PYTHONPATH={shlex.quote(str(SCRIPTS_DIR))} "
         f"python3 -m oum_worker.runner mark-started "
         f"--label {shlex.quote(label)} "
         f"--logs-dir {shlex.quote(str(logs_dir))}"

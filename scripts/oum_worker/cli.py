@@ -10,7 +10,9 @@ import subprocess
 import sys
 import time as _time
 from dataclasses import asdict as _asdict
+from datetime import datetime as _dt, timezone as _tz
 from pathlib import Path
+from zoneinfo import ZoneInfo as _ZI
 
 from oum_worker import jsonl, launchd, state
 from oum_worker import tmux as _tmux
@@ -19,6 +21,19 @@ from oum_worker.launchd import ROOT
 
 DEFAULT_LOGS_DIR = ROOT / ".logs" / "oum-worker"
 DEFAULT_TMUX_SESSION = "oum"
+_IST = _ZI("Asia/Kolkata")
+
+
+def _utc_iso_to_ist_display(s):
+    """Convert UTC ISO 8601 (Z suffix) → 'YYYY-MM-DD HH:MM IST' for human output."""
+    if not s:
+        return "-"
+    try:
+        s2 = s[:-1] + "+00:00" if s.endswith("Z") else s
+        d = _dt.fromisoformat(s2).astimezone(_IST)
+        return d.strftime("%Y-%m-%d %H:%M IST")
+    except (ValueError, AttributeError):
+        return s
 
 
 # ---------- helpers ----------
@@ -75,12 +90,12 @@ def _compute_state(s: state.WorkerState) -> str:
     return "scheduled" if s.launchd_label else "dead"
 
 
-def _do_kill(workdir: Path, label: str, *, purge: bool, tmux_session: str) -> None:
+def _do_kill(workdir: Path, label: str, *, purge: bool) -> None:
     s = state.read(workdir, label)
-    try:
-        _tmux.kill_window(s.tmux_session, s.tmux_window)
-    except _tmux.TmuxError:
-        pass
+    # kill_window is best-effort: it does not raise on a missing window
+    # (no check=True under the hood). The TmuxError type is reserved for
+    # collision errors in open_window; we don't expect it here.
+    _tmux.kill_window(s.tmux_session, s.tmux_window)
     if s.launchd_label:
         launchd.unbootstrap(s.launchd_label)
     state.update(workdir, label, ended_at=state.utc_now_iso())
@@ -98,8 +113,9 @@ def _add_spawn_args(sp: argparse.ArgumentParser) -> None:
     p = sp.add_mutually_exclusive_group(required=True)
     p.add_argument("--prompt")
     p.add_argument("--prompt-file")
-    sp.add_argument("--interactive", dest="headless", action="store_false", default=False)
-    sp.add_argument("--headless", dest="headless", action="store_true")
+    mode = sp.add_mutually_exclusive_group()
+    mode.add_argument("--interactive", dest="headless", action="store_false", default=False)
+    mode.add_argument("--headless", dest="headless", action="store_true")
     sp.add_argument("--repo")
     sp.add_argument("--cwd")
     sp.add_argument("--name", help="Claude session name (interactive only)")
@@ -125,7 +141,7 @@ def _handle_spawn(args: argparse.Namespace) -> int:
 
     if args.replace:
         try:
-            _do_kill(workdir, args.label, purge=True, tmux_session=args.tmux_session)
+            _do_kill(workdir, args.label, purge=True)
         except state.WorkerNotFound:
             pass
 
@@ -174,7 +190,7 @@ def _spawn_interactive(args: argparse.Namespace, s: state.WorkerState) -> int:
 
 
 def _spawn_headless(args: argparse.Namespace, s: state.WorkerState, prompt: str) -> int:
-    cmd = ["claude", "-p"]
+    cmd = [args.claude_bin, "-p"]
     if args.resume:
         cmd.extend(["--resume", args.resume])
     if args.permission_mode:
@@ -205,7 +221,7 @@ def _handle_schedule(args: argparse.Namespace) -> int:
 
     if args.replace:
         try:
-            _do_kill(workdir, args.label, purge=True, tmux_session=args.tmux_session)
+            _do_kill(workdir, args.label, purge=True)
         except state.WorkerNotFound:
             pass
 
@@ -284,11 +300,14 @@ def _handle_capture(args: argparse.Namespace) -> int:
     if not s.jsonl_path:
         return 0
     since = args.since or s.last_send_at or s.created_at
-    out = jsonl.extract_response(
-        Path(s.jsonl_path), since=since,
-        include_thinking=args.include_thinking,
-        include_tool_use=args.include_tool_use,
-    )
+    if args.full:
+        out = jsonl.dump_events(Path(s.jsonl_path), since=since)
+    else:
+        out = jsonl.extract_response(
+            Path(s.jsonl_path), since=since,
+            include_thinking=args.include_thinking,
+            include_tool_use=args.include_tool_use,
+        )
     print(out)
     state.update(workdir, args.label, last_capture_at=state.utc_now_iso())
     return 0
@@ -333,6 +352,20 @@ def _handle_wait(args: argparse.Namespace) -> int:
 
 
 def _handle_ask(args: argparse.Namespace) -> int:
+    workdir = workdir_from_args(args)
+    try:
+        s = state.read(workdir, args.label)
+    except state.WorkerNotFound:
+        print(f"no worker named {args.label!r}", file=sys.stderr)
+        return 1
+    # Headless ask requires the prior subprocess to have exited and a session id
+    # to be discoverable so we can resume. We don't currently spawn a fresh
+    # `claude -p --resume <sid>` for follow-ups; flag this until that lands.
+    if s.mode == "headless":
+        print("error: ask --headless follow-ups not yet implemented; "
+              "spawn a fresh headless worker per request",
+              file=sys.stderr)
+        return 4
     send_args = argparse.Namespace(
         logs_dir=args.logs_dir, label=args.label,
         tmux_session=args.tmux_session, text=args.text, file=None,
@@ -366,9 +399,10 @@ def _handle_list(args: argparse.Namespace) -> int:
     if not workers:
         print("(no workers)")
         return 0
-    print(f"{'LABEL':<20s} {'MODE':<12s} {'STATE':<10s} {'CREATED':<25s}")
+    print(f"{'LABEL':<20s} {'MODE':<12s} {'STATE':<10s} {'CREATED':<22s}")
     for s in workers:
-        print(f"{s.label:<20s} {s.mode:<12s} {_compute_state(s):<10s} {s.created_at:<25s}")
+        print(f"{s.label:<20s} {s.mode:<12s} {_compute_state(s):<10s} "
+              f"{_utc_iso_to_ist_display(s.created_at):<22s}")
     return 0
 
 
@@ -386,9 +420,9 @@ def _handle_status(args: argparse.Namespace) -> int:
     print(f"  state:        {_compute_state(s)}")
     print(f"  cwd:          {s.cwd}")
     print(f"  session_id:   {s.session_id or '-'}")
-    print(f"  created:      {s.created_at}")
-    print(f"  started:      {s.started_at or '-'}")
-    print(f"  last_send:    {s.last_send_at or '-'}")
+    print(f"  created:      {_utc_iso_to_ist_display(s.created_at)}")
+    print(f"  started:      {_utc_iso_to_ist_display(s.started_at)}")
+    print(f"  last_send:    {_utc_iso_to_ist_display(s.last_send_at)}")
     print(f"  tmux:         {s.tmux_session}:{s.tmux_window}  →  tmux a -t {s.tmux_session}")
     print(f"  log:          {s.tmux_log}")
     return 0
@@ -397,8 +431,7 @@ def _handle_status(args: argparse.Namespace) -> int:
 def _handle_kill(args: argparse.Namespace) -> int:
     workdir = workdir_from_args(args)
     try:
-        _do_kill(workdir, args.label, purge=args.purge,
-                 tmux_session=args.tmux_session)
+        _do_kill(workdir, args.label, purge=args.purge)
     except state.WorkerNotFound:
         print(f"no worker named {args.label!r}", file=sys.stderr)
         return 1
@@ -413,9 +446,16 @@ def _handle_logs(args: argparse.Namespace) -> int:
         print(f"no worker named {args.label!r}", file=sys.stderr)
         return 1
     if args.launchd:
-        target = workdir / args.label / "launchd.out"
-    else:
-        target = Path(s.tmux_log)
+        out_path = workdir / args.label / "launchd.out"
+        err_path = workdir / args.label / "launchd.err"
+        print(out_path)
+        print(err_path)
+        if args.tail:
+            paths = [str(p) for p in (out_path, err_path) if p.exists()]
+            if paths:
+                os.execvp("tail", ["tail", "-F", *paths])
+        return 0
+    target = Path(s.tmux_log)
     print(target)
     if args.tail and target.exists():
         os.execvp("tail", ["tail", "-F", str(target)])

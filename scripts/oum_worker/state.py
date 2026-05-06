@@ -1,18 +1,26 @@
 """Per-worker state.json registry, flock-protected."""
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
+import time
 from dataclasses import dataclass, asdict, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 
+FLOCK_TIMEOUT_SECONDS = 5.0
+FLOCK_POLL_SECONDS = 0.05
+
+
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + \
-           f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
+    # Single now() — splitting across two calls can produce a millisecond
+    # rollover where the seconds string and the millis disagree.
+    n = datetime.now(timezone.utc)
+    return n.strftime("%Y-%m-%dT%H:%M:%S.") + f"{n.microsecond // 1000:03d}Z"
 
 
 class WorkerNotFound(Exception):
@@ -21,6 +29,27 @@ class WorkerNotFound(Exception):
 
 class LabelExists(Exception):
     pass
+
+
+class StateBusy(Exception):
+    """Raised when flock cannot be acquired within FLOCK_TIMEOUT_SECONDS."""
+
+
+def _acquire_flock(fd: int, op: int) -> None:
+    """Try to acquire `op` flock on fd, polling up to FLOCK_TIMEOUT_SECONDS."""
+    deadline = time.monotonic() + FLOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            fcntl.flock(fd, op | fcntl.LOCK_NB)
+            return
+        except OSError as e:
+            if e.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
+                raise
+            if time.monotonic() >= deadline:
+                raise StateBusy(
+                    f"could not acquire state.json lock within {FLOCK_TIMEOUT_SECONDS}s"
+                ) from e
+            time.sleep(FLOCK_POLL_SECONDS)
 
 
 @dataclass
@@ -99,7 +128,7 @@ def read(workdir: Path, label: str) -> WorkerState:
     if not p.exists():
         raise WorkerNotFound(label)
     with open(p, "r", encoding="utf-8") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+        _acquire_flock(f.fileno(), fcntl.LOCK_SH)
         try:
             try:
                 data = json.load(f)
@@ -118,7 +147,7 @@ def update(workdir: Path, label: str, **changes) -> WorkerState:
     if not p.exists():
         raise WorkerNotFound(label)
     with open(p, "r+", encoding="utf-8") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        _acquire_flock(f.fileno(), fcntl.LOCK_EX)
         try:
             data = json.load(f)
             data.update(changes)
@@ -135,7 +164,7 @@ def _write_locked(path: Path, s: WorkerState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, 0o644)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _acquire_flock(fd, fcntl.LOCK_EX)
         os.ftruncate(fd, 0)
         with os.fdopen(fd, "w", encoding="utf-8", closefd=False) as f:
             json.dump(asdict(s), f, indent=2, sort_keys=False)

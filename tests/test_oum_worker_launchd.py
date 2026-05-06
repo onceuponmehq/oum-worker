@@ -118,3 +118,39 @@ def test_build_inner_command_headless_uses_claude_p(tmp_path):
     assert "claude -p" in cmd
     assert "--resume" in cmd
     assert "abc-123" in cmd
+
+
+def test_build_inner_command_sets_pythonpath_for_runner(tmp_path):
+    """Without PYTHONPATH, `python3 -m oum_worker.runner` would die with
+    ModuleNotFoundError after the inner command's `cd` runs."""
+    cmd = launchd.build_inner_command(
+        cwd=tmp_path,
+        claude_bin="cc",
+        prompt_file=tmp_path / "p.md",
+        log_path=tmp_path / "tmux.log",
+        label="ppath",
+        logs_dir=tmp_path / "logs",
+        resume=None, new_session=True, session_name=None,
+        permission_mode=None, skip_permissions=False,
+        tmux_session="oum-worker-test", headless=False,
+    )
+    assert "PYTHONPATH=" in cmd
+    assert str(launchd.SCRIPTS_DIR) in cmd
+    # PYTHONPATH must come before the runner module-load
+    assert cmd.index("PYTHONPATH=") < cmd.index("oum_worker.runner")
+
+
+def test_build_inner_command_headless_honors_claude_bin(tmp_path):
+    """--cc-command should set the binary even in headless mode (was hardcoded `claude`)."""
+    cmd = launchd.build_inner_command(
+        cwd=tmp_path,
+        claude_bin="/path/to/stub-cc",
+        prompt_file=tmp_path / "p.md",
+        log_path=tmp_path / "out.txt",
+        label="hl-bin",
+        logs_dir=tmp_path / "logs",
+        resume=None, new_session=False, session_name=None,
+        permission_mode=None, skip_permissions=False,
+        tmux_session="oum-worker-test", headless=True,
+    )
+    assert "/path/to/stub-cc -p" in cmd
