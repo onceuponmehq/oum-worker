@@ -75,3 +75,14 @@ def test_label_collision_raises(tmp_path):
     with pytest.raises(state.LabelExists):
         state.create(workdir, label="a", mode="interactive", cwd=Path("/x"),
                      claude_bin="cc", tmux_session="oum")
+
+
+def test_read_corrupt_json_raises_worker_not_found(tmp_path):
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    s = state.create(workdir, label="bad", mode="interactive", cwd=Path("/x"),
+                     claude_bin="cc", tmux_session="oum")
+    # Corrupt the state.json
+    Path(s.prompt_file).parent.joinpath("state.json").write_text("{not valid json")
+    with pytest.raises(state.WorkerNotFound):
+        state.read(workdir, "bad")

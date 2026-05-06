@@ -101,7 +101,10 @@ def read(workdir: Path, label: str) -> WorkerState:
     with open(p, "r", encoding="utf-8") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_SH)
         try:
-            data = json.load(f)
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise WorkerNotFound(label) from e
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     return WorkerState(**{k: data.get(k) for k in _FIELD_NAMES})
@@ -130,9 +133,10 @@ def update(workdir: Path, label: str, **changes) -> WorkerState:
 
 def _write_locked(path: Path, s: WorkerState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
+        os.ftruncate(fd, 0)
         with os.fdopen(fd, "w", encoding="utf-8", closefd=False) as f:
             json.dump(asdict(s), f, indent=2, sort_keys=False)
             f.write("\n")
