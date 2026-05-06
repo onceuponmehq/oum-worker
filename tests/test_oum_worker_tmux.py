@@ -62,3 +62,19 @@ def test_kill_window_removes_target():
     tmux.kill_window(SESSION, "throwaway")
     time.sleep(0.1)
     assert tmux.window_exists(SESSION, "throwaway") is False
+
+
+def test_open_window_runs_command_and_remains_on_exit(tmp_path):
+    tmux.ensure_session(SESSION)
+    log = tmp_path / "out.log"
+    tmux.open_window(
+        session=SESSION,
+        window="testwin",
+        cwd=tmp_path,
+        command='/bin/zsh -c "echo hello-from-window > out.log"',
+        log_path=log,
+    )
+    # The command writes to a file in the worker's cwd; give it a moment.
+    time.sleep(0.5)
+    assert (tmp_path / "out.log").read_text().strip() == "hello-from-window"
+    assert tmux.window_exists(SESSION, "testwin") is True   # remain-on-exit on

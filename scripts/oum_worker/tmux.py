@@ -53,3 +53,23 @@ def window_exists(session: str, window: str) -> bool:
 
 def kill_window(session: str, window: str) -> None:
     _run("kill-window", "-t", f"{session}:{window}")
+
+
+def open_window(*, session: str, window: str, cwd: Path, command: str,
+                log_path: Path, replace: bool = False) -> None:
+    """Open `window` inside `session` running `command` in `cwd`.
+
+    - Creates session if missing.
+    - If window already exists and replace=False: TmuxError.
+    - If replace=True: kill the existing window first.
+    - Sets remain-on-exit and pipes pane output to log_path.
+    """
+    ensure_session(session)
+    if window_exists(session, window):
+        if not replace:
+            raise TmuxError(f"window {window} already exists in session {session}")
+        kill_window(session, window)
+    target = f"{session}:{window}"
+    _run("new-window", "-t", f"{session}:", "-n", window, "-c", str(cwd), command, check=True)
+    _run("setw", "-t", target, "remain-on-exit", "on")
+    _run("pipe-pane", "-t", target, "-o", f"cat >> {shlex.quote(str(log_path))}")
