@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oum-worker"
+version = "0.1.0"
+description = "Manage Claude Code worker sessions with tmux and launchd."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "Once Upon Me" }
+]
+keywords = ["claude-code", "agents", "tmux", "launchd", "automation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Software Development",
+  "Topic :: System :: Systems Administration"
+]
+
+[project.urls]
+Homepage = "https://github.com/onceuponmehq/oum-worker"
+Issues = "https://github.com/onceuponmehq/oum-worker/issues"
+
+[project.scripts]
+oum-worker = "oum_worker.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "scripts"}
+
+[tool.setuptools.packages.find]
+where = ["scripts"]
+include = ["oum_worker*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["scripts"]
+testpaths = ["tests"]
+addopts = "-q"

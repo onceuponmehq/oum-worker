@@ -1,0 +1,17 @@
+{
+  "default_cwd": "/Users/you/Documents/OnceUponMe/oum-os",
+  "logs_dir": "/Users/you/Documents/OnceUponMe/oum-os/.logs/oum-worker",
+  "tmux_session": "oum",
+  "claude_bin": "cc",
+  "timezone": "Asia/Kolkata",
+  "launchd_label_prefix": "com.oum.schedule.",
+  "path": "/Users/you/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  "repo_aliases": {
+    "oum-os": "/Users/you/Documents/OnceUponMe/oum-os",
+    "os": "/Users/you/Documents/OnceUponMe/oum-os",
+    "onceuponme": "/Users/you/Documents/OnceUponMe",
+    "backend": "/Users/you/Documents/OnceUponMe/codebase/backend",
+    "frontend": "/Users/you/Documents/OnceUponMe/codebase/frontend",
+    "accounting": "/Users/you/Documents/OnceUponMe/codebase/accounting"
+  }
+}

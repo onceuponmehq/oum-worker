@@ -14,41 +14,50 @@ from datetime import datetime as _dt, timezone as _tz
 from pathlib import Path
 from zoneinfo import ZoneInfo as _ZI
 
+from oum_worker import config as worker_config
 from oum_worker import jsonl, launchd, state
 from oum_worker import tmux as _tmux
-from oum_worker.launchd import ROOT
 
 
-DEFAULT_LOGS_DIR = ROOT / ".logs" / "oum-worker"
-DEFAULT_TMUX_SESSION = "oum"
-_IST = _ZI("Asia/Kolkata")
+DEFAULT_TMUX_SESSION = worker_config.DEFAULT_TMUX_SESSION
 
 
-def _utc_iso_to_ist_display(s):
-    """Convert UTC ISO 8601 (Z suffix) → 'YYYY-MM-DD HH:MM IST' for human output."""
+def _utc_iso_to_display(s: str | None, cfg: worker_config.WorkerConfig) -> str:
+    """Convert UTC ISO 8601 (Z suffix) to the configured timezone for display."""
     if not s:
         return "-"
     try:
         s2 = s[:-1] + "+00:00" if s.endswith("Z") else s
-        d = _dt.fromisoformat(s2).astimezone(_IST)
-        return d.strftime("%Y-%m-%d %H:%M IST")
+        zone = _ZI(cfg.timezone)
+        d = _dt.fromisoformat(s2).astimezone(zone)
+        return d.strftime("%Y-%m-%d %H:%M %Z")
     except (ValueError, AttributeError):
         return s
 
 
 # ---------- helpers ----------
 
+def config_from_args(args: argparse.Namespace) -> worker_config.WorkerConfig:
+    return worker_config.load_config(getattr(args, "config", None))
+
+
 def workdir_from_args(args: argparse.Namespace) -> Path:
-    p = Path(args.logs_dir).expanduser().resolve()
+    cfg = config_from_args(args)
+    p = Path(args.logs_dir).expanduser().resolve() if getattr(args, "logs_dir", None) else cfg.logs_dir
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
 def _add_global(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "--config",
+        default=argparse.SUPPRESS,
+        help="Path to JSON config file (or OUM_WORKER_CONFIG).",
+    )
+    parser.add_argument(
         "--logs-dir",
-        default=os.environ.get("OUM_WORKER_LOGS_DIR", str(DEFAULT_LOGS_DIR)),
-        help=f"State + log directory root (default: {DEFAULT_LOGS_DIR})",
+        default=argparse.SUPPRESS,
+        help="State + log directory root (overrides config and OUM_WORKER_LOGS_DIR).",
     )
 
 
@@ -58,9 +67,20 @@ def _read_prompt(args: argparse.Namespace) -> str:
     return (getattr(args, "prompt", None) or "").strip()
 
 
-def _resolve_cwd(args: argparse.Namespace) -> Path:
+def _resolve_cwd(args: argparse.Namespace, cfg: worker_config.WorkerConfig) -> Path:
     return launchd.resolve_workdir(repo=getattr(args, "repo", None),
-                                   cwd=getattr(args, "cwd", None))
+                                   cwd=getattr(args, "cwd", None),
+                                   cfg=cfg)
+
+
+def _resolve_claude_bin(args: argparse.Namespace,
+                        cfg: worker_config.WorkerConfig) -> str:
+    return getattr(args, "claude_bin", None) or cfg.claude_bin
+
+
+def _resolve_tmux_session(args: argparse.Namespace,
+                          cfg: worker_config.WorkerConfig) -> str:
+    return getattr(args, "tmux_session", None) or cfg.tmux_session
 
 
 def _resolve_session_id(workdir: Path, s: state.WorkerState) -> state.WorkerState:
@@ -119,25 +139,44 @@ def _add_spawn_args(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--repo")
     sp.add_argument("--cwd")
     sp.add_argument("--name", help="Claude session name (interactive only)")
-    sp.add_argument("--cc-command", "--claude-bin", dest="claude_bin", default="cc")
+    sp.add_argument("--cc-command", "--claude-bin", dest="claude_bin", default=None)
     sp.add_argument("--permission-mode",
                     choices=["acceptEdits", "auto", "bypassPermissions",
                              "default", "dontAsk", "plan"])
     sp.add_argument("--dangerously-skip-permissions", dest="skip_permissions",
                     action="store_true")
-    sp.add_argument("--tmux-session", default=DEFAULT_TMUX_SESSION)
+    sp.add_argument("--tmux-session", default=None)
     sp.add_argument("--replace", action="store_true")
+    sp.add_argument(
+        "--env",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help=(
+            "Inject KEY=VALUE env var into the worker. Repeatable. "
+            "Reserved keys (TZ, PATH, LANG) are rejected."
+        ),
+    )
 
 
 # ---------- handlers ----------
 
 def _handle_spawn(args: argparse.Namespace) -> int:
+    cfg = config_from_args(args)
     workdir = workdir_from_args(args)
-    cwd = _resolve_cwd(args)
+    cwd = _resolve_cwd(args, cfg)
+    claude_bin = _resolve_claude_bin(args, cfg)
+    tmux_session = _resolve_tmux_session(args, cfg)
     prompt = _read_prompt(args)
     if not prompt:
         print("error: prompt is empty", file=sys.stderr)
         return 1
+
+    try:
+        env_pairs = launchd.parse_env_pairs(getattr(args, "env", None))
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
     if args.replace:
         try:
@@ -151,8 +190,8 @@ def _handle_spawn(args: argparse.Namespace) -> int:
             label=args.label,
             mode="headless" if args.headless else "interactive",
             cwd=cwd,
-            claude_bin=args.claude_bin,
-            tmux_session=args.tmux_session,
+            claude_bin=claude_bin,
+            tmux_session=tmux_session,
         )
     except state.LabelExists:
         print(f"error: label {args.label!r} already exists (pass --replace to overwrite)",
@@ -162,18 +201,21 @@ def _handle_spawn(args: argparse.Namespace) -> int:
     Path(s.prompt_file).write_text(prompt, encoding="utf-8")
 
     if args.headless:
-        return _spawn_headless(args, s, prompt)
-    return _spawn_interactive(args, s)
+        return _spawn_headless(args, s, prompt, env_pairs=env_pairs)
+    return _spawn_interactive(args, s, env_pairs=env_pairs)
 
 
-def _spawn_interactive(args: argparse.Namespace, s: state.WorkerState) -> int:
+def _spawn_interactive(args: argparse.Namespace, s: state.WorkerState,
+                       *, env_pairs: dict[str, str] | None = None) -> int:
     cc = launchd._cc_invocation(
-        claude_bin=args.claude_bin, resume=args.resume, new_session=args.new_session,
+        claude_bin=s.claude_bin, resume=args.resume, new_session=args.new_session,
         session_name=args.name, permission_mode=args.permission_mode,
         skip_permissions=args.skip_permissions, prompt_file=Path(s.prompt_file),
         headless=False,
     )
-    pane_command = f"/bin/zsh -lic {shlex.quote(f'cd {shlex.quote(s.cwd)} && {cc}')}"
+    exports = launchd._env_export_prefix(env_pairs)
+    inner = f"{exports}cd {shlex.quote(s.cwd)} && {cc}"
+    pane_command = f"/bin/zsh -lic {shlex.quote(inner)}"
     _tmux.open_window(
         session=s.tmux_session,
         window=s.tmux_window,
@@ -189,8 +231,9 @@ def _spawn_interactive(args: argparse.Namespace, s: state.WorkerState) -> int:
     return 0
 
 
-def _spawn_headless(args: argparse.Namespace, s: state.WorkerState, prompt: str) -> int:
-    cmd = [args.claude_bin, "-p"]
+def _spawn_headless(args: argparse.Namespace, s: state.WorkerState, prompt: str,
+                    *, env_pairs: dict[str, str] | None = None) -> int:
+    cmd = [s.claude_bin, "-p"]
     if args.resume:
         cmd.extend(["--resume", args.resume])
     if args.permission_mode:
@@ -199,10 +242,15 @@ def _spawn_headless(args: argparse.Namespace, s: state.WorkerState, prompt: str)
         cmd.append("--dangerously-skip-permissions")
     cmd.append(prompt)
 
+    subprocess_env: dict[str, str] | None = None
+    if env_pairs:
+        subprocess_env = {**os.environ, **env_pairs}
+
     response_path = Path(s.tmux_log).parent / "response.txt"
     state.update(workdir_from_args(args), s.label, started_at=state.utc_now_iso())
     with open(response_path, "w") as out:
-        r = subprocess.run(cmd, cwd=s.cwd, stdout=out, stderr=subprocess.STDOUT)
+        r = subprocess.run(cmd, cwd=s.cwd, stdout=out, stderr=subprocess.STDOUT,
+                           env=subprocess_env)
     state.update(workdir_from_args(args), s.label, ended_at=state.utc_now_iso())
     if r.returncode != 0:
         print(f"headless worker {s.label} exited {r.returncode}", file=sys.stderr)
@@ -212,12 +260,21 @@ def _spawn_headless(args: argparse.Namespace, s: state.WorkerState, prompt: str)
 
 
 def _handle_schedule(args: argparse.Namespace) -> int:
+    cfg = config_from_args(args)
     workdir = workdir_from_args(args)
-    cwd = _resolve_cwd(args)
+    cwd = _resolve_cwd(args, cfg)
+    claude_bin = _resolve_claude_bin(args, cfg)
+    tmux_session = _resolve_tmux_session(args, cfg)
     prompt = _read_prompt(args)
     if not prompt:
         print("error: prompt is empty", file=sys.stderr)
         return 1
+
+    try:
+        env_pairs = launchd.parse_env_pairs(getattr(args, "env", None))
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
     if args.replace:
         try:
@@ -228,28 +285,32 @@ def _handle_schedule(args: argparse.Namespace) -> int:
     try:
         s = state.create(
             workdir, label=args.label, mode="scheduled", cwd=cwd,
-            claude_bin=args.claude_bin, tmux_session=args.tmux_session,
+            claude_bin=claude_bin, tmux_session=tmux_session,
         )
     except state.LabelExists:
         print(f"error: label {args.label!r} already exists", file=sys.stderr)
         return 5
 
     Path(s.prompt_file).write_text(prompt, encoding="utf-8")
-    target = launchd.parse_target(args.delay, args.at)
-    launchd_label = launchd.normalize_label(args.label)
+    target = launchd.parse_target(args.delay, args.at, cfg=cfg)
+    launchd_label = launchd.normalize_label(args.label, cfg=cfg)
     plist_path = Path(args.launch_agents_dir).expanduser() / f"{launchd_label}.plist"
 
     inner_cmd = launchd.build_inner_command(
-        cwd=cwd, claude_bin=args.claude_bin, prompt_file=Path(s.prompt_file),
+        cwd=cwd, claude_bin=claude_bin, prompt_file=Path(s.prompt_file),
         log_path=Path(s.tmux_log), label=args.label, logs_dir=workdir,
         resume=args.resume, new_session=args.new_session, session_name=args.name,
         permission_mode=args.permission_mode, skip_permissions=args.skip_permissions,
-        tmux_session=args.tmux_session, headless=args.headless,
+        tmux_session=tmux_session, headless=args.headless,
+        env_pairs=env_pairs,
+        scripts_dir=cfg.scripts_dir,
     )
     payload = launchd.build_plist(
         label=launchd_label, cwd=cwd, command=inner_cmd, target=target,
         stdout_path=workdir / args.label / "launchd.out",
         stderr_path=workdir / args.label / "launchd.err",
+        env_pairs=env_pairs,
+        cfg=cfg,
     )
 
     if args.dry_run:
@@ -265,9 +326,9 @@ def _handle_schedule(args: argparse.Namespace) -> int:
 
     print(f"Scheduled {launchd_label}")
     print(f"  Plist:   {plist_path}")
-    print(f"  Runs at: {target.strftime('%Y-%m-%d %H:%M IST')}")
+    print(f"  Runs at: {target.strftime('%Y-%m-%d %H:%M %Z')}")
     print(f"  Prompt:  {s.prompt_file}")
-    print(f"  Window:  tmux a -t {args.tmux_session}  →  '{args.label}'")
+    print(f"  Window:  tmux a -t {tmux_session}  →  '{args.label}'")
     return 0
 
 
@@ -367,14 +428,16 @@ def _handle_ask(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 4
     send_args = argparse.Namespace(
-        logs_dir=args.logs_dir, label=args.label,
+        config=getattr(args, "config", None),
+        logs_dir=getattr(args, "logs_dir", None), label=args.label,
         tmux_session=args.tmux_session, text=args.text, file=None,
     )
     rc = _handle_send(send_args)
     if rc != 0:
         return rc
     wait_args = argparse.Namespace(
-        logs_dir=args.logs_dir, label=args.label,
+        config=getattr(args, "config", None),
+        logs_dir=getattr(args, "logs_dir", None), label=args.label,
         timeout=args.timeout, stable_ms=args.stable_ms,
         poll_ms=500, discover_timeout=30.0,
     )
@@ -382,7 +445,8 @@ def _handle_ask(args: argparse.Namespace) -> int:
     if rc != 0:
         return rc
     cap_args = argparse.Namespace(
-        logs_dir=args.logs_dir, label=args.label,
+        config=getattr(args, "config", None),
+        logs_dir=getattr(args, "logs_dir", None), label=args.label,
         full=False, include_thinking=args.include_thinking,
         include_tool_use=args.include_tool_use, since=None,
     )
@@ -390,6 +454,7 @@ def _handle_ask(args: argparse.Namespace) -> int:
 
 
 def _handle_list(args: argparse.Namespace) -> int:
+    cfg = config_from_args(args)
     workdir = workdir_from_args(args)
     workers = state.list_all(workdir)
     if args.json:
@@ -402,11 +467,12 @@ def _handle_list(args: argparse.Namespace) -> int:
     print(f"{'LABEL':<20s} {'MODE':<12s} {'STATE':<10s} {'CREATED':<22s}")
     for s in workers:
         print(f"{s.label:<20s} {s.mode:<12s} {_compute_state(s):<10s} "
-              f"{_utc_iso_to_ist_display(s.created_at):<22s}")
+              f"{_utc_iso_to_display(s.created_at, cfg):<22s}")
     return 0
 
 
 def _handle_status(args: argparse.Namespace) -> int:
+    cfg = config_from_args(args)
     workdir = workdir_from_args(args)
     try:
         s = state.read(workdir, args.label)
@@ -420,9 +486,9 @@ def _handle_status(args: argparse.Namespace) -> int:
     print(f"  state:        {_compute_state(s)}")
     print(f"  cwd:          {s.cwd}")
     print(f"  session_id:   {s.session_id or '-'}")
-    print(f"  created:      {_utc_iso_to_ist_display(s.created_at)}")
-    print(f"  started:      {_utc_iso_to_ist_display(s.started_at)}")
-    print(f"  last_send:    {_utc_iso_to_ist_display(s.last_send_at)}")
+    print(f"  created:      {_utc_iso_to_display(s.created_at, cfg)}")
+    print(f"  started:      {_utc_iso_to_display(s.started_at, cfg)}")
+    print(f"  last_send:    {_utc_iso_to_display(s.last_send_at, cfg)}")
     print(f"  tmux:         {s.tmux_session}:{s.tmux_window}  →  tmux a -t {s.tmux_session}")
     print(f"  log:          {s.tmux_log}")
     return 0
@@ -490,7 +556,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_send = sub.add_parser("send", help="Send a message to a live worker.")
     _add_global(sp_send)
     sp_send.add_argument("--label", required=True)
-    sp_send.add_argument("--tmux-session", default=DEFAULT_TMUX_SESSION)
+    sp_send.add_argument("--tmux-session", default=None)
     g = sp_send.add_mutually_exclusive_group(required=True)
     g.add_argument("text", nargs="?")
     g.add_argument("--file")
@@ -518,7 +584,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_global(sp_ask)
     sp_ask.add_argument("--label", required=True)
     sp_ask.add_argument("text")
-    sp_ask.add_argument("--tmux-session", default=DEFAULT_TMUX_SESSION)
+    sp_ask.add_argument("--tmux-session", default=None)
     sp_ask.add_argument("--timeout", type=float, default=600.0)
     sp_ask.add_argument("--stable-ms", type=int, default=1500)
     sp_ask.add_argument("--include-thinking", action="store_true")
@@ -540,7 +606,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_global(sp_kill)
     sp_kill.add_argument("--label", required=True)
     sp_kill.add_argument("--purge", action="store_true")
-    sp_kill.add_argument("--tmux-session", default=DEFAULT_TMUX_SESSION)
+    sp_kill.add_argument("--tmux-session", default=None)
     sp_kill.set_defaults(_handler=_handle_kill)
 
     sp_logs = sub.add_parser("logs", help="Print log path or tail it.")
@@ -555,7 +621,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    return args._handler(args)
+    try:
+        return args._handler(args)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/bin/zsh
 # Wrapper for oum-worker CLI.
 ROOT="$(cd "$(dirname "$0")"/.. && pwd)"
-cd "$ROOT/scripts"
+export PYTHONPATH="$ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}"
 exec /usr/bin/env python3 -m oum_worker.cli "$@"

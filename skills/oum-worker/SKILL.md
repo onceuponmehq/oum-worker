@@ -1,13 +1,13 @@
 ---
 name: oum-worker
-description: Use when scheduling, spawning, sending to, capturing from, waiting on, asking, listing, killing, or checking status of Claude Code worker sessions on Tushar's Mac. Replaces and supersedes `oum-schedule`.
+description: Use when scheduling, spawning, sending to, capturing from, waiting on, asking, listing, killing, or checking status of Claude Code worker sessions. Replaces and supersedes `oum-schedule`.
 ---
 
 # oum-worker
 
-Use this skill to manage Claude Code worker sessions. Workers are `cc` (Claude Code) processes running in a shared tmux session named `oum`, identified by a caller-supplied label. Some workers are scheduled (launchd, future), some are spawned now, some are headless one-shots (`claude -p`).
+Use this skill to manage Claude Code worker sessions. Workers are Claude Code processes running in a configured tmux session, identified by a caller-supplied label. Some workers are scheduled (launchd, future), some are spawned now, some are headless one-shots (`claude -p`).
 
-Run from `/Users/tushar/Documents/OnceUponMe/oum-os`. The CLI is `scripts/oum-worker`.
+Use `oum-worker` if installed from `pyproject.toml`; in a source checkout, `scripts/oum-worker` is the wrapper. Private deployment details such as repo aliases, timezone, launchd prefix, logs dir, tmux session, and Claude binary must come from `--config`, `OUM_WORKER_CONFIG`, or environment variables.
 
 ## When to use which verb
 
@@ -22,37 +22,37 @@ Run from `/Users/tushar/Documents/OnceUponMe/oum-os`. The CLI is `scripts/oum-wo
 - `kill`      close the tmux window and unbootstrap any launchd plist
 - `logs`      print the log path, or `--tail` it
 
-Every worker is identified by `--label`. The same label is the tmux window name and (for scheduled workers) the launchd plist suffix. Pick a label the caller can remember (for example `keeley-014`, `cof-q1`, `nightly-eod`).
+Every worker is identified by `--label`. The same label is the tmux window name and (for scheduled workers) the launchd plist suffix. Pick a label the caller can remember, such as `feature-review`, `cofounder-q1`, or `nightly-summary`.
 
 ## Common shapes
 
 Spawn a worker now and ask it something synchronously:
 
 ```bash
-scripts/oum-worker spawn --label cof-q1 --new --prompt "Look up the GST rule for Anarock POS." --headless
-scripts/oum-worker ask   --label cof-q1 "Confirm with the source path."
+oum-worker --config .oum-worker.json spawn --label research-q1 --new --prompt "Check the release notes and summarize the breaking changes." --headless
+oum-worker --config .oum-worker.json ask   --label research-q1 "Confirm with the source path."
 ```
 
 Spawn an interactive worker and follow up later (different shells / sessions):
 
 ```bash
-scripts/oum-worker spawn --label keeley-014 --new --prompt "$(cat tasks/active/keeley-014.md)"
-scripts/oum-worker ask   --label keeley-014 "What's the recommended budget split?"
-scripts/oum-worker kill  --label keeley-014
+oum-worker --config .oum-worker.json spawn --label feature-014 --new --prompt "$(cat tasks/active/feature-014.md)"
+oum-worker --config .oum-worker.json ask   --label feature-014 "What's the recommended next step?"
+oum-worker --config .oum-worker.json kill  --label feature-014
 ```
 
 Schedule a one-shot run (the existing oum-schedule pattern):
 
 ```bash
-scripts/oum-worker schedule --in 3h --label nightly-eod --new --prompt "Run the EOD summary."
+oum-worker --config .oum-worker.json schedule --in 3h --label nightly-summary --new --prompt "Run the nightly summary."
 ```
 
 List and inspect:
 
 ```bash
-scripts/oum-worker list
-scripts/oum-worker status --label keeley-014
-scripts/oum-worker logs --label keeley-014 --tail
+oum-worker --config .oum-worker.json list
+oum-worker --config .oum-worker.json status --label feature-014
+oum-worker --config .oum-worker.json logs --label feature-014 --tail
 ```
 
 ## Hard rules
@@ -61,6 +61,7 @@ scripts/oum-worker logs --label keeley-014 --tail
 - Do not pass `--dangerously-skip-permissions` unless the user explicitly asks.
 - Do not invent a session id; if `capture`/`status`/`wait` returns "session JSONL not found", let the CLI's prompt-match discovery resolve it once the worker has produced output.
 - Do not edit `state.json` by hand; use the CLI verbs.
+- Do not hardcode private repo paths or label prefixes in prompts or scripts; put them in config.
 - If `oum-schedule` was previously used, prefer `oum-worker schedule` (the alias still works but prints a deprecation hint).
 
 ## State on disk
@@ -72,4 +73,4 @@ Per-worker directory under `.logs/oum-worker/<label>/`:
 - `tmux.log`     — pipe-pane capture of the tmux window
 - `launchd.out` / `launchd.err` — only for scheduled workers
 
-Timestamps inside `state.json` are UTC (Z suffix). Display layer converts to IST.
+Timestamps inside `state.json` are UTC (Z suffix). Display uses the configured timezone.

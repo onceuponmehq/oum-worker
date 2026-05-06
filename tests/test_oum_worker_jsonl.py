@@ -14,8 +14,8 @@ FIXTURES = ROOT / "tests" / "fixtures" / "oum_worker"
 
 
 def test_encode_cwd_replaces_separators_with_dashes():
-    p = Path("/Users/tushar/Documents/OnceUponMe/oum-os")
-    assert jsonl.encode_cwd(p) == "-Users-tushar-Documents-OnceUponMe-oum-os"
+    p = Path("/Users/alex/projects/demo-app")
+    assert jsonl.encode_cwd(p) == "-Users-alex-projects-demo-app"
 
 
 def test_find_by_session_id_returns_path_when_present(tmp_path, monkeypatch):

@@ -1,0 +1,10 @@
+.state.json
+.oum-worker.json
+.logs/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+*.egg-info/
+build/
+dist/

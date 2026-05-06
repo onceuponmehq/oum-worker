@@ -1,4 +1,4 @@
-"""launchd plist builders + time parsing, lifted from scripts/oum_schedule.py."""
+"""launchd plist builders + time parsing."""
 from __future__ import annotations
 
 import os
@@ -6,31 +6,63 @@ import plistlib
 import re
 import shlex
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from oum_worker import config as worker_config
 
-ROOT = Path(__file__).resolve().parents[2]   # repo root
-SCRIPTS_DIR = ROOT / "scripts"
-IST = ZoneInfo("Asia/Kolkata")
-DEFAULT_PATH = "/Users/tushar/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
-KNOWN_REPOS = {
-    "oum-os": ROOT,
-    "os": ROOT,
-    "onceuponme": ROOT.parent,
-    "backend": ROOT.parent / "codebase" / "backend",
-    "frontend": ROOT.parent / "codebase" / "frontend",
-    "accounting": ROOT.parent / "codebase" / "accounting",
-}
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 
 DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
+# Reserved env keys are written by build_plist as the baseline
+# EnvironmentVariables. User-supplied --env values must not clobber them so
+# that scheduled jobs always inherit the same timezone, PATH, and locale.
+RESERVED_ENV_KEYS = frozenset({"TZ", "PATH", "LANG"})
 
-def now_ist() -> datetime:
-    return datetime.now(IST)
+
+def parse_env_pairs(values: list[str] | None) -> dict[str, str]:
+    """Parse repeated --env KEY=VALUE flags into a dict.
+
+    Splits on the first ``=`` so VALUE may itself contain equals signs
+    (e.g. URLs with query strings). Refuses reserved baseline keys so
+    they can't be overridden from the command line.
+
+    Later occurrences of the same KEY override earlier ones.
+    """
+    if not values:
+        return {}
+
+    pairs: dict[str, str] = {}
+    for raw in values:
+        if "=" not in raw:
+            raise ValueError(
+                f"--env value {raw!r} must be KEY=VALUE (missing '=')"
+            )
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"--env value {raw!r} has an empty key")
+        if key in RESERVED_ENV_KEYS:
+            raise ValueError(
+                f"--env key {key!r} is reserved (baseline plist env). "
+                "Pick a different name."
+            )
+        pairs[key] = value
+    return pairs
+
+
+def _zone(cfg: worker_config.WorkerConfig | None = None,
+          now: datetime | None = None) -> tzinfo:
+    if cfg is None and now is not None and now.tzinfo is not None:
+        return now.tzinfo
+    return ZoneInfo((cfg or worker_config.load_config()).timezone)
+
+
+def now_in_timezone(cfg: worker_config.WorkerConfig | None = None) -> datetime:
+    return datetime.now(_zone(cfg))
 
 
 def round_up_to_minute(value: datetime) -> datetime:
@@ -61,15 +93,17 @@ def parse_delay(value: str) -> int:
     return total
 
 
-def parse_at_time(value: str, now: datetime) -> datetime:
+def parse_at_time(value: str, now: datetime, *,
+                  cfg: worker_config.WorkerConfig | None = None) -> datetime:
+    zone = _zone(cfg, now)
     text = value.strip()
     m = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
     if m:
         h, mi = int(m.group(1)), int(m.group(2))
         if h > 23 or mi > 59:
             raise ValueError("--at time must be a valid HH:MM value")
-        target = now.astimezone(IST).replace(hour=h, minute=mi, second=0, microsecond=0)
-        if target <= now.astimezone(IST):
+        target = now.astimezone(zone).replace(hour=h, minute=mi, second=0, microsecond=0)
+        if target <= now.astimezone(zone):
             target += timedelta(days=1)
         return target
     try:
@@ -77,55 +111,75 @@ def parse_at_time(value: str, now: datetime) -> datetime:
     except ValueError as e:
         raise ValueError("--at must be HH:MM or YYYY-MM-DD HH:MM") from e
     if target.tzinfo is None:
-        target = target.replace(tzinfo=IST)
-    target = target.astimezone(IST)
-    if target <= now.astimezone(IST):
+        target = target.replace(tzinfo=zone)
+    target = target.astimezone(zone)
+    if target <= now.astimezone(zone):
         raise ValueError("--at must be in the future")
     return target
 
 
 def parse_target(delay: Optional[str], at: Optional[str], *,
-                 now: Optional[datetime] = None) -> datetime:
+                 now: Optional[datetime] = None,
+                 cfg: worker_config.WorkerConfig | None = None) -> datetime:
     if delay and at:
         raise ValueError("use either --in or --at, not both")
     if not delay and not at:
         raise ValueError("schedule requires --in or --at")
-    cur = (now or now_ist()).astimezone(IST)
+    zone = _zone(cfg, now)
+    cur = (now or now_in_timezone(cfg)).astimezone(zone)
     if delay:
         return round_up_to_minute(cur + timedelta(seconds=parse_delay(delay)))
-    return round_up_to_minute(parse_at_time(at, cur))
+    return round_up_to_minute(parse_at_time(at, cur, cfg=cfg))
 
 
-def normalize_label(value: str) -> str:
+def normalize_label(value: str, *,
+                    cfg: worker_config.WorkerConfig | None = None) -> str:
     text = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip(".-")
     if not text:
         raise ValueError("label must contain at least one alphanumeric character")
     if text.startswith("com."):
         return text
-    return f"com.oum.schedule.{text}"
+    prefix = (cfg or worker_config.load_config()).launchd_label_prefix
+    return f"{prefix}{text}"
 
 
-def resolve_workdir(*, repo: Optional[str], cwd: Optional[str]) -> Path:
+def resolve_workdir(*, repo: Optional[str], cwd: Optional[str],
+                    cfg: worker_config.WorkerConfig | None = None) -> Path:
+    cfg = cfg or worker_config.load_config()
     if repo and cwd:
         raise ValueError("use either --repo or --cwd, not both")
-    if repo and repo in KNOWN_REPOS:
-        return KNOWN_REPOS[repo].expanduser().resolve()
+    if repo:
+        if repo not in cfg.repo_aliases:
+            known = ", ".join(sorted(cfg.repo_aliases)) or "(none configured)"
+            raise ValueError(f"unknown repo alias {repo!r}; known aliases: {known}")
+        return cfg.repo_aliases[repo].expanduser().resolve()
     if cwd:
         return Path(cwd).expanduser().resolve()
-    return ROOT
+    return cfg.default_cwd
 
 
 def build_plist(*, label: str, cwd: Path, command: str, target: datetime,
-                stdout_path: Path, stderr_path: Path) -> bytes:
+                stdout_path: Path, stderr_path: Path,
+                env_pairs: dict[str, str] | None = None,
+                cfg: worker_config.WorkerConfig | None = None) -> bytes:
+    cfg = cfg or worker_config.load_config()
+    environment: dict[str, str] = {
+        "TZ": cfg.timezone,
+        "PATH": cfg.path,
+        "LANG": "en_US.UTF-8",
+    }
+    if env_pairs:
+        for key, value in env_pairs.items():
+            # Defence in depth: parse_env_pairs already refuses these,
+            # but if a caller passes the dict directly, keep baseline.
+            if key in RESERVED_ENV_KEYS:
+                continue
+            environment[key] = value
     plist = {
         "Label": label,
         "WorkingDirectory": "/tmp",
         "ProgramArguments": ["/bin/zsh", "-lic", command],
-        "EnvironmentVariables": {
-            "TZ": "Asia/Kolkata",
-            "PATH": DEFAULT_PATH,
-            "LANG": "en_US.UTF-8",
-        },
+        "EnvironmentVariables": environment,
         "StartCalendarInterval": {
             "Month": target.month,
             "Day": target.day,
@@ -182,25 +236,54 @@ def _cc_invocation(*, claude_bin: str, resume: Optional[str], new_session: bool,
     return " ".join(parts)
 
 
+def _env_export_prefix(env_pairs: dict[str, str] | None) -> str:
+    """Return ``export K=V && ...`` to prepend to the inner shell chain.
+
+    Returns the empty string when there are no exports. Reserved keys are
+    skipped (defence in depth — `parse_env_pairs` already refused them).
+
+    launchd passes EnvironmentVariables to the outermost shell, but the
+    tmux + interactive-zsh chain may strip or reset variables; an explicit
+    ``export`` in the inner command is the safe path so the inner ``claude``
+    process inherits them.
+    """
+    if not env_pairs:
+        return ""
+    parts = [
+        f"export {key}={shlex.quote(value)}"
+        for key, value in env_pairs.items()
+        if key not in RESERVED_ENV_KEYS
+    ]
+    if not parts:
+        return ""
+    return " && ".join(parts) + " && "
+
+
 def build_inner_command(*, cwd: Path, claude_bin: str, prompt_file: Path,
                         log_path: Path, label: str, logs_dir: Path,
                         resume: Optional[str], new_session: bool,
                         session_name: Optional[str], permission_mode: Optional[str],
                         skip_permissions: bool, tmux_session: str,
-                        headless: bool) -> str:
+                        headless: bool,
+                        env_pairs: dict[str, str] | None = None,
+                        scripts_dir: Path | None = None) -> str:
     """Build the zsh command launchd executes when the job fires.
 
     Steps inside the command (in order):
-    1. cd to cwd.
-    2. python3 -m oum_worker.runner mark-started --label <L>   (writes started_at)
-    3a. interactive: open a tmux window running cc.
-    3b. headless:    run `claude -p ...` with stdout to <logs_dir>/<label>/response.txt.
+    1. export user-supplied env vars (if any).
+    2. cd to cwd.
+    3. python3 -m oum_worker.runner mark-started --label <L>   (writes started_at)
+    4a. interactive: open a tmux window running cc.
+    4b. headless:    run `claude -p ...` with stdout to <logs_dir>/<label>/response.txt.
+
+    Exports come first so any cd-side hooks (chpwd, direnv, etc.) see the
+    new env.
     """
     # PYTHONPATH lets `python3 -m oum_worker.runner` resolve from any cwd —
     # without it, the launchd inner command would die with ModuleNotFoundError
     # because we cd into the worker's cwd before running this.
     mark = (
-        f"PYTHONPATH={shlex.quote(str(SCRIPTS_DIR))} "
+        f"PYTHONPATH={shlex.quote(str(scripts_dir or SCRIPTS_DIR))} "
         f"python3 -m oum_worker.runner mark-started "
         f"--label {shlex.quote(label)} "
         f"--logs-dir {shlex.quote(str(logs_dir))}"
@@ -210,9 +293,11 @@ def build_inner_command(*, cwd: Path, claude_bin: str, prompt_file: Path,
         session_name=session_name, permission_mode=permission_mode,
         skip_permissions=skip_permissions, prompt_file=prompt_file, headless=headless,
     )
+    exports = _env_export_prefix(env_pairs)
     if headless:
         response = logs_dir / label / "response.txt"
         return (
+            f"{exports}"
             f"cd {shlex.quote(str(cwd))} && "
             f"{mark} && "
             f"{cc} > {shlex.quote(str(response))} 2>&1"
@@ -220,7 +305,7 @@ def build_inner_command(*, cwd: Path, claude_bin: str, prompt_file: Path,
     # Interactive: drive a shared tmux session
     from oum_worker.tmux import find_tmux_bin
     tmux_bin = shlex.quote(str(find_tmux_bin()))
-    inner = f"cd {shlex.quote(str(cwd))} && {mark} && {cc}"
+    inner = f"{exports}cd {shlex.quote(str(cwd))} && {mark} && {cc}"
     pane_command = f"/bin/zsh -lic {shlex.quote(inner)}"
     target = f"{tmux_session}:{label}"
     return (

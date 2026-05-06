@@ -122,6 +122,150 @@ def test_schedule_writes_plist_and_state(tmp_path):
     assert (plist_dir / (data["launchd_label"] + ".plist")).exists()
 
 
+def test_schedule_uses_config_file_defaults(tmp_path):
+    plist_dir = tmp_path / "LaunchAgents"
+    default_cwd = tmp_path / "project"
+    default_cwd.mkdir()
+    cfg_path = tmp_path / "oum-worker.json"
+    cfg_path.write_text(_json.dumps({
+        "logs_dir": str(tmp_path / "configured-logs"),
+        "default_cwd": str(default_cwd),
+        "tmux_session": "configured-session",
+        "launchd_label_prefix": "com.example.worker.",
+        "timezone": "Asia/Kolkata"
+    }))
+
+    r = _run_cli(
+        "schedule",
+        "--config", str(cfg_path),
+        "--in", "1h",
+        "--label", "configured",
+        "--new",
+        "--prompt", "configured hi",
+        "--launch-agents-dir", str(plist_dir),
+        "--no-bootstrap",
+    )
+
+    assert r.returncode == 0, r.stderr
+    sj = tmp_path / "configured-logs" / "configured" / "state.json"
+    data = _json.loads(sj.read_text())
+    assert data["cwd"] == str(default_cwd)
+    assert data["tmux_session"] == "configured-session"
+    assert data["launchd_label"] == "com.example.worker.configured"
+    assert (plist_dir / "com.example.worker.configured.plist").exists()
+
+
+def test_schedule_injects_env_into_plist_and_inner_command(tmp_path):
+    """`schedule --env KEY=VALUE` writes plist EnvironmentVariables and the
+    inner shell exports, so the inner claude inherits the value through both
+    paths (launchd and the tmux/zsh chain)."""
+    plist_dir = tmp_path / "LaunchAgents"
+    r = _run_cli(
+        "schedule",
+        "--in", "1h",
+        "--label", "env-sched",
+        "--new",
+        "--prompt", "hi",
+        "--launch-agents-dir", str(plist_dir),
+        "--no-bootstrap",
+        "--cwd", str(tmp_path),
+        "--tmux-session", TEST_TMUX_SESSION,
+        "--logs-dir", str(tmp_path / "logs"),
+        "--env", "OUM_TASK_ID=2026-05-06-001",
+        "--env", "FOO=bar baz",
+    )
+    assert r.returncode == 0, r.stderr
+
+    import plistlib
+    sj = (tmp_path / "logs" / "env-sched" / "state.json")
+    data = _json.loads(sj.read_text())
+    plist_path = plist_dir / (data["launchd_label"] + ".plist")
+    assert plist_path.exists()
+    parsed = plistlib.loads(plist_path.read_bytes())
+    env = parsed["EnvironmentVariables"]
+    assert env["OUM_TASK_ID"] == "2026-05-06-001"
+    assert env["FOO"] == "bar baz"
+    # Baseline preserved.
+    assert env["LANG"] == "en_US.UTF-8"
+    assert "TZ" in env and "PATH" in env
+
+    # The inner zsh chain must also export the values so the claude process
+    # inherits them after the tmux + nested zsh hop.
+    inner_cmd = " ".join(parsed["ProgramArguments"])
+    assert "export OUM_TASK_ID=2026-05-06-001" in inner_cmd
+    assert "FOO=" in inner_cmd
+    assert "bar baz" in inner_cmd
+
+
+def test_schedule_rejects_malformed_env(tmp_path):
+    plist_dir = tmp_path / "LaunchAgents"
+    r = _run_cli(
+        "schedule",
+        "--in", "1h",
+        "--label", "bad-env",
+        "--new",
+        "--prompt", "hi",
+        "--launch-agents-dir", str(plist_dir),
+        "--no-bootstrap",
+        "--cwd", str(tmp_path),
+        "--tmux-session", TEST_TMUX_SESSION,
+        "--logs-dir", str(tmp_path / "logs"),
+        "--env", "BROKEN_NO_EQUALS",
+    )
+    assert r.returncode == 2
+    assert "missing '='" in r.stderr
+
+
+def test_schedule_rejects_reserved_env_key(tmp_path):
+    plist_dir = tmp_path / "LaunchAgents"
+    r = _run_cli(
+        "schedule",
+        "--in", "1h",
+        "--label", "reserved-env",
+        "--new",
+        "--prompt", "hi",
+        "--launch-agents-dir", str(plist_dir),
+        "--no-bootstrap",
+        "--cwd", str(tmp_path),
+        "--tmux-session", TEST_TMUX_SESSION,
+        "--logs-dir", str(tmp_path / "logs"),
+        "--env", "TZ=Etc/Mars",
+    )
+    assert r.returncode == 2
+    assert "reserved" in r.stderr
+
+
+def test_shell_wrapper_preserves_calling_cwd_for_relative_config(tmp_path):
+    plist_dir = tmp_path / "LaunchAgents"
+    default_cwd = tmp_path / "project"
+    default_cwd.mkdir()
+    (tmp_path / "oum-worker.json").write_text(_json.dumps({
+        "logs_dir": "configured-logs",
+        "default_cwd": "project",
+        "launchd_label_prefix": "com.example.worker."
+    }))
+
+    r = subprocess.run(
+        [str(ROOT / "scripts" / "oum-worker"),
+         "--config", "oum-worker.json",
+         "schedule",
+         "--in", "1h",
+         "--label", "wrapper-config",
+         "--new",
+         "--prompt", "configured hi",
+         "--launch-agents-dir", str(plist_dir),
+         "--no-bootstrap"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+
+    assert r.returncode == 0, r.stderr
+    sj = tmp_path / "configured-logs" / "wrapper-config" / "state.json"
+    data = _json.loads(sj.read_text())
+    assert data["cwd"] == str(default_cwd)
+
+
 # ---------- send + capture (T18) ----------
 
 @pytest.mark.skipif(TMUX_BIN is None, reason="tmux required")

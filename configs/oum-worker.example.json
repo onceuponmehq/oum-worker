@@ -1,0 +1,13 @@
+{
+  "default_cwd": "/Users/you/projects/example-app",
+  "logs_dir": ".logs/oum-worker",
+  "tmux_session": "workers",
+  "claude_bin": "claude",
+  "timezone": "UTC",
+  "launchd_label_prefix": "com.example.worker.",
+  "path": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  "repo_aliases": {
+    "app": "/Users/you/projects/example-app",
+    "docs": "/Users/you/projects/example-docs"
+  }
+}
