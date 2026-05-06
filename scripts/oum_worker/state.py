@@ -143,3 +143,20 @@ def _write_locked(path: Path, s: WorkerState) -> None:
         fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
+def list_all(workdir: Path) -> list[WorkerState]:
+    """Return all workers present in workdir, in arbitrary order."""
+    if not workdir.exists():
+        return []
+    out: list[WorkerState] = []
+    for child in workdir.iterdir():
+        if not child.is_dir():
+            continue
+        if not (child / "state.json").exists():
+            continue
+        try:
+            out.append(read(workdir, child.name))
+        except (json.JSONDecodeError, WorkerNotFound):
+            continue
+    return out

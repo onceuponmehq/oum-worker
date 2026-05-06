@@ -86,3 +86,21 @@ def test_read_corrupt_json_raises_worker_not_found(tmp_path):
     Path(s.prompt_file).parent.joinpath("state.json").write_text("{not valid json")
     with pytest.raises(state.WorkerNotFound):
         state.read(workdir, "bad")
+
+
+def test_list_all_returns_known_workers(tmp_path):
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    state.create(workdir, label="a", mode="interactive", cwd=Path("/x"),
+                 claude_bin="cc", tmux_session="oum")
+    state.create(workdir, label="b", mode="headless", cwd=Path("/y"),
+                 claude_bin="cc", tmux_session="oum")
+    labels = sorted(s.label for s in state.list_all(workdir))
+    assert labels == ["a", "b"]
+
+
+def test_list_all_skips_directories_without_state_json(tmp_path):
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    (workdir / "stray").mkdir()  # directory but no state.json
+    assert state.list_all(workdir) == []
