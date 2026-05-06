@@ -139,3 +139,69 @@ def test_open_window_pipe_pane_writes_log(tmp_path):
         time.sleep(0.05)
     else:
         pytest.fail(f"pipe-pane log never received marker; got: {log.read_text() if log.exists() else '(no file)'}")
+
+
+def test_send_text_inserts_into_window(tmp_path):
+    """Use an interactive bash so typed lines are interpreted as commands."""
+    tmux.ensure_session(SESSION)
+    out_file = tmp_path / "received"
+    tmux.open_window(
+        session=SESSION,
+        window="echo-win",
+        cwd=tmp_path,
+        command="/bin/bash --noprofile --norc -i",
+        log_path=tmp_path / "log.out",
+    )
+    time.sleep(0.3)
+    tmux.send_text(SESSION, "echo-win", f"echo hello-tmux > {out_file}")
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if out_file.exists() and out_file.read_text().strip() == "hello-tmux":
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("send_text payload never reached window")
+
+
+def test_send_file_inserts_buffer_into_window(tmp_path):
+    """Buffer contents pasted into an interactive shell are executed as commands."""
+    tmux.ensure_session(SESSION)
+    out_file = tmp_path / "received-file"
+    payload = tmp_path / "payload.txt"
+    payload.write_text(f"echo from-buffer > {out_file}\n")
+    tmux.open_window(
+        session=SESSION,
+        window="buf-win",
+        cwd=tmp_path,
+        command="/bin/bash --noprofile --norc -i",
+        log_path=tmp_path / "log.out",
+    )
+    time.sleep(0.3)
+    tmux.send_file(SESSION, "buf-win", payload)
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if out_file.exists() and "from-buffer" in out_file.read_text():
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("send_file buffer never reached window")
+
+
+def test_capture_pane_returns_text(tmp_path):
+    tmux.ensure_session(SESSION)
+    tmux.open_window(
+        session=SESSION,
+        window="cap-win",
+        cwd=tmp_path,
+        command='/bin/zsh -c "echo unique-marker-xyz; sleep 5"',
+        log_path=tmp_path / "log.out",
+    )
+    deadline = time.time() + 3.0
+    out = ""
+    while time.time() < deadline:
+        out = tmux.capture_pane(SESSION, "cap-win")
+        if "unique-marker-xyz" in out:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"capture_pane never saw marker; got: {out[:200]}")

@@ -79,3 +79,27 @@ def open_window(*, session: str, window: str, cwd: Path, command: str,
     target = f"{session}:{window}"
     _run("new-window", "-t", f"{session}:", "-n", window, "-c", str(cwd), command, check=True)
     _run("pipe-pane", "-t", target, "-o", f"cat >> {shlex.quote(str(log_path))}")
+
+
+def send_text(session: str, window: str, text: str, *, submit: bool = True) -> None:
+    """Send `text` into the pane. If submit=True, append Enter."""
+    target = f"{session}:{window}"
+    if submit:
+        _run("send-keys", "-t", target, text, "Enter", check=True)
+    else:
+        _run("send-keys", "-t", target, text, check=True)
+
+
+def send_file(session: str, window: str, path: Path, *, submit: bool = True) -> None:
+    """Send file contents via tmux paste-buffer (avoids shell quoting / shortcut keys)."""
+    target = f"{session}:{window}"
+    _run("load-buffer", str(path), check=True)
+    _run("paste-buffer", "-t", target, check=True)
+    if submit:
+        _run("send-keys", "-t", target, "Enter", check=True)
+
+
+def capture_pane(session: str, window: str) -> str:
+    target = f"{session}:{window}"
+    r = _run("capture-pane", "-t", target, "-p")
+    return r.stdout if r.returncode == 0 else ""
