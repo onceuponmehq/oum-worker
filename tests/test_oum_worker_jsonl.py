@@ -151,3 +151,23 @@ def test_wait_for_idle_times_out_when_no_new_lines(tmp_path):
     )
     assert result.idle is False
     assert result.timed_out is True
+
+
+def test_extract_response_default_strips_thinking_and_tools(tmp_path):
+    src = FIXTURES / "conversation_with_tools.jsonl"
+    out = jsonl.extract_response(src, since="2026-05-06T10:59:00.000Z")
+    assert out == "File checked, all good."
+
+
+def test_extract_response_include_thinking(tmp_path):
+    src = FIXTURES / "conversation_with_tools.jsonl"
+    out = jsonl.extract_response(src, since="2026-05-06T10:59:00.000Z", include_thinking=True)
+    assert "need to read" in out
+    assert "File checked" in out
+
+
+def test_extract_response_include_tool_use(tmp_path):
+    src = FIXTURES / "conversation_with_tools.jsonl"
+    out = jsonl.extract_response(src, since="2026-05-06T10:59:00.000Z", include_tool_use=True)
+    assert "Read" in out  # tool name surfaced
+    assert "File checked" in out

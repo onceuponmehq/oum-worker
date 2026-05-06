@@ -1,0 +1,5 @@
+{"type":"user","timestamp":"2026-05-06T11:00:00.000Z","message":{"role":"user","content":"check the file"}}
+{"type":"assistant","timestamp":"2026-05-06T11:00:01.000Z","message":{"role":"assistant","id":"msg_T1","content":[{"type":"thinking","thinking":"need to read"}],"stop_reason":"tool_use"}}
+{"type":"assistant","timestamp":"2026-05-06T11:00:02.000Z","message":{"role":"assistant","id":"msg_T1","content":[{"type":"tool_use","name":"Read","input":{"path":"/x"}}],"stop_reason":"tool_use"}}
+{"type":"user","timestamp":"2026-05-06T11:00:03.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"abc","content":"file contents"}]}}
+{"type":"assistant","timestamp":"2026-05-06T11:00:04.000Z","message":{"role":"assistant","id":"msg_T2","content":[{"type":"text","text":"File checked, all good."}],"stop_reason":"end_turn"}}

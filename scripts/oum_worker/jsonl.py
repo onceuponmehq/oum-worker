@@ -159,3 +159,39 @@ def wait_for_idle(jsonl_path: Path, *, last_send_at: str, timeout: float = 600.0
         if time.monotonic() > deadline:
             return WaitResult(False, True, last_assistant_text, last_stop_reason)
         time.sleep(poll_s)
+
+
+def extract_response(jsonl_path: Path, *, since: str,
+                     include_thinking: bool = False,
+                     include_tool_use: bool = False) -> str:
+    """Concatenate text from assistant lines after `since` (UTC ISO 8601)."""
+    if not jsonl_path.exists():
+        return ""
+    since_dt = _parse_iso_utc(since)
+    parts: list[str] = []
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = d.get("timestamp")
+            if not ts or _parse_iso_utc(ts) <= since_dt:
+                continue
+            t = d.get("type")
+            msg = d.get("message", {})
+            content = msg.get("content")
+            if t == "assistant" and isinstance(content, list):
+                for b in content:
+                    bt = b.get("type")
+                    if bt == "text":
+                        parts.append(b.get("text", ""))
+                    elif bt == "thinking" and include_thinking:
+                        parts.append("[thinking] " + b.get("thinking", ""))
+                    elif bt == "tool_use" and include_tool_use:
+                        parts.append(f"[tool_use {b.get('name','?')}]")
+            elif t == "user" and include_tool_use and isinstance(content, list):
+                for b in content:
+                    if b.get("type") == "tool_result":
+                        parts.append("[tool_result]")
+    return "".join(parts).strip()
