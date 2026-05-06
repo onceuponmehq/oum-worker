@@ -76,3 +76,45 @@ def test_write_plist_refuses_overwrite_without_replace(tmp_path):
     with pytest.raises(FileExistsError):
         launchd.write_plist(p, b"<plist></plist>", replace=False)
     launchd.write_plist(p, b"<plist></plist>", replace=True)  # no error
+
+
+def test_build_inner_command_calls_mark_started_then_cc(tmp_path):
+    cmd = launchd.build_inner_command(
+        cwd=tmp_path,
+        claude_bin="cc",
+        prompt_file=tmp_path / "p.md",
+        log_path=tmp_path / "tmux.log",
+        label="demo",
+        logs_dir=tmp_path / "logs",
+        resume=None,
+        new_session=True,
+        session_name=None,
+        permission_mode=None,
+        skip_permissions=False,
+        tmux_session="oum-worker-test",
+        headless=False,
+    )
+    assert "_inner mark-started" in cmd or "runner mark-started" in cmd
+    assert "--label demo" in cmd or "'demo'" in cmd
+    assert cmd.index("mark-started") < cmd.index("cc ")
+
+
+def test_build_inner_command_headless_uses_claude_p(tmp_path):
+    cmd = launchd.build_inner_command(
+        cwd=tmp_path,
+        claude_bin="claude",
+        prompt_file=tmp_path / "p.md",
+        log_path=tmp_path / "out.txt",
+        label="hl",
+        logs_dir=tmp_path / "logs",
+        resume="abc-123",
+        new_session=False,
+        session_name=None,
+        permission_mode=None,
+        skip_permissions=False,
+        tmux_session="oum-worker-test",
+        headless=True,
+    )
+    assert "claude -p" in cmd
+    assert "--resume" in cmd
+    assert "abc-123" in cmd

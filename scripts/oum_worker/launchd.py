@@ -162,3 +162,71 @@ def unbootstrap(label: str) -> None:
     uid = os.getuid()
     subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"],
                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+import shlex
+
+
+def _cc_invocation(*, claude_bin: str, resume: Optional[str], new_session: bool,
+                   session_name: Optional[str], permission_mode: Optional[str],
+                   skip_permissions: bool, prompt_file: Path, headless: bool) -> str:
+    parts: list[str] = [claude_bin]
+    if headless:
+        parts = ["claude", "-p"]
+    if resume:
+        parts.extend(["--resume", shlex.quote(resume)])
+    if new_session and session_name and not headless:
+        parts.extend(["--name", shlex.quote(session_name)])
+    if permission_mode:
+        parts.extend(["--permission-mode", shlex.quote(permission_mode)])
+    if skip_permissions:
+        parts.append("--dangerously-skip-permissions")
+    parts.append(f'"$(cat {shlex.quote(str(prompt_file))})"')
+    return " ".join(parts)
+
+
+def build_inner_command(*, cwd: Path, claude_bin: str, prompt_file: Path,
+                        log_path: Path, label: str, logs_dir: Path,
+                        resume: Optional[str], new_session: bool,
+                        session_name: Optional[str], permission_mode: Optional[str],
+                        skip_permissions: bool, tmux_session: str,
+                        headless: bool) -> str:
+    """Build the zsh command launchd executes when the job fires.
+
+    Steps inside the command (in order):
+    1. cd to cwd.
+    2. python3 -m oum_worker.runner mark-started --label <L>   (writes started_at)
+    3a. interactive: open a tmux window running cc.
+    3b. headless:    run `claude -p ...` with stdout to <logs_dir>/<label>/response.txt.
+    """
+    mark = (
+        f"python3 -m oum_worker.runner mark-started "
+        f"--label {shlex.quote(label)} "
+        f"--logs-dir {shlex.quote(str(logs_dir))}"
+    )
+    cc = _cc_invocation(
+        claude_bin=claude_bin, resume=resume, new_session=new_session,
+        session_name=session_name, permission_mode=permission_mode,
+        skip_permissions=skip_permissions, prompt_file=prompt_file, headless=headless,
+    )
+    if headless:
+        response = logs_dir / label / "response.txt"
+        return (
+            f"cd {shlex.quote(str(cwd))} && "
+            f"{mark} && "
+            f"{cc} > {shlex.quote(str(response))} 2>&1"
+        )
+    # Interactive: drive a shared tmux session
+    from oum_worker.tmux import find_tmux_bin
+    tmux_bin = shlex.quote(str(find_tmux_bin()))
+    inner = f"cd {shlex.quote(str(cwd))} && {mark} && {cc}"
+    pane_command = f"/bin/zsh -lic {shlex.quote(inner)}"
+    target = f"{tmux_session}:{label}"
+    return (
+        f"{tmux_bin} new-session -d -s {shlex.quote(tmux_session)} -x 220 -y 50 2>/dev/null || true; "
+        f"{tmux_bin} kill-window -t {shlex.quote(target)} 2>/dev/null || true; "
+        f"{tmux_bin} new-window -t {shlex.quote(tmux_session + ':')} "
+        f"-n {shlex.quote(label)} -c {shlex.quote(str(cwd))} {shlex.quote(pane_command)}; "
+        f"{tmux_bin} setw -t {shlex.quote(target)} remain-on-exit on 2>/dev/null || true; "
+        f"{tmux_bin} pipe-pane -t {shlex.quote(target)} -o {shlex.quote('cat >> ' + str(log_path))}"
+    )
