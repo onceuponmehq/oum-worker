@@ -32,3 +32,15 @@ def test_find_by_session_id_returns_path_when_present(tmp_path, monkeypatch):
 def test_find_by_session_id_returns_none_when_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     assert jsonl.find_by_session_id(Path("/x/y"), "missing") is None
+
+
+def test_encode_cwd_handles_nonexistent_path():
+    """resolve() should still produce a stable encoding even for paths that don't exist."""
+    p = Path("/nonexistent/x/y")
+    assert jsonl.encode_cwd(p) == "-nonexistent-x-y"
+
+
+def test_projects_dir_raises_when_home_unset(monkeypatch):
+    monkeypatch.delenv("HOME", raising=False)
+    with pytest.raises(RuntimeError, match="HOME"):
+        jsonl.projects_dir()

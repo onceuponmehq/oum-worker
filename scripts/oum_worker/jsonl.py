@@ -11,11 +11,15 @@ from typing import Iterator, Optional
 
 def encode_cwd(cwd: Path) -> str:
     """Convert /a/b/c → -a-b-c, matching ~/.claude/projects/<encoded>/ layout."""
-    return "-" + "-".join(p for p in str(cwd.resolve() if cwd.exists() else cwd).split("/") if p)
+    return "-" + "-".join(p for p in str(cwd.resolve()).split("/") if p)
 
 
 def projects_dir() -> Path:
-    return Path(os.environ.get("HOME", "")) / ".claude" / "projects"
+    """Return ~/.claude/projects/. Raises RuntimeError if HOME is unset."""
+    home = os.environ.get("HOME")
+    if not home:
+        raise RuntimeError("HOME environment variable not set")
+    return Path(home) / ".claude" / "projects"
 
 
 def find_by_session_id(cwd: Path, session_id: str) -> Optional[Path]:
