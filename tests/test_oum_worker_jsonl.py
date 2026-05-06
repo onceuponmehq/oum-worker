@@ -120,3 +120,34 @@ def test_discover_by_prompt_returns_only_match_even_outside_window(tmp_path, mon
 
     found = jsonl.discover_by_prompt(Path("/x"), "hi", created_at="2026-05-06T10:00:00.000Z")
     assert found == "33333333-3333-3333-3333-333333333333"
+
+
+def test_wait_for_idle_detects_end_turn_after_stability(tmp_path):
+    """Replay the simple conversation: file already complete; wait sees the latest end_turn + stability."""
+    src = FIXTURES / "conversation_simple.jsonl"
+    target = tmp_path / "session.jsonl"
+    target.write_text(src.read_text())
+    # last_send_at chosen between the two user messages
+    result = jsonl.wait_for_idle(
+        target,
+        last_send_at="2026-05-06T10:35:00.000Z",
+        timeout=5.0,
+        stable_ms=200,
+        poll_ms=50,
+    )
+    assert result.idle is True
+    assert result.last_assistant_text == "Doing well, thanks. Ready to help."
+
+
+def test_wait_for_idle_times_out_when_no_new_lines(tmp_path):
+    target = tmp_path / "empty.jsonl"
+    target.write_text('{"type":"user","timestamp":"2026-05-06T10:00:00.000Z","message":{"role":"user","content":"hi"}}\n')
+    result = jsonl.wait_for_idle(
+        target,
+        last_send_at="2026-05-06T11:00:00.000Z",  # in the future relative to file
+        timeout=0.5,
+        stable_ms=200,
+        poll_ms=50,
+    )
+    assert result.idle is False
+    assert result.timed_out is True
