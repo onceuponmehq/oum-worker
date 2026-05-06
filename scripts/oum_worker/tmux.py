@@ -42,6 +42,9 @@ def ensure_session(session: str, *, width: int = 220, height: int = 50) -> None:
     if r.returncode == 0:
         return
     _run("new-session", "-d", "-s", session, "-x", str(width), "-y", str(height), check=True)
+    # remain-on-exit applied at session-default level so new windows inherit
+    # before their command runs — closes a race for fast-exiting commands.
+    _run("set-window-option", "-t", session, "-g", "remain-on-exit", "on")
 
 
 def window_exists(session: str, window: str) -> bool:
@@ -59,10 +62,10 @@ def open_window(*, session: str, window: str, cwd: Path, command: str,
                 log_path: Path, replace: bool = False) -> None:
     """Open `window` inside `session` running `command` in `cwd`.
 
-    - Creates session if missing.
-    - If window already exists and replace=False: TmuxError.
+    - Creates session if missing (with remain-on-exit as the session-default).
+    - If window already exists and replace=False: raises TmuxError.
     - If replace=True: kill the existing window first.
-    - Sets remain-on-exit and pipes pane output to log_path.
+    - Pipes pane output to log_path.
     """
     ensure_session(session)
     if window_exists(session, window):
@@ -71,5 +74,4 @@ def open_window(*, session: str, window: str, cwd: Path, command: str,
         kill_window(session, window)
     target = f"{session}:{window}"
     _run("new-window", "-t", f"{session}:", "-n", window, "-c", str(cwd), command, check=True)
-    _run("setw", "-t", target, "remain-on-exit", "on")
     _run("pipe-pane", "-t", target, "-o", f"cat >> {shlex.quote(str(log_path))}")

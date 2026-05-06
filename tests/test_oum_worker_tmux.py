@@ -74,7 +74,68 @@ def test_open_window_runs_command_and_remains_on_exit(tmp_path):
         command='/bin/zsh -c "echo hello-from-window > out.log"',
         log_path=log,
     )
-    # The command writes to a file in the worker's cwd; give it a moment.
-    time.sleep(0.5)
-    assert (tmp_path / "out.log").read_text().strip() == "hello-from-window"
+    deadline = time.time() + 5.0
+    out_file = tmp_path / "out.log"
+    while time.time() < deadline:
+        if out_file.exists() and out_file.read_text().strip() == "hello-from-window":
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("command output never appeared")
     assert tmux.window_exists(SESSION, "testwin") is True   # remain-on-exit on
+
+
+def test_open_window_collision_without_replace_raises():
+    tmux.ensure_session(SESSION)
+    log = Path("/tmp/oum-worker-collision-test.log")
+    tmux.open_window(
+        session=SESSION, window="dup", cwd=Path("/tmp"),
+        command='/bin/zsh -c "sleep 30"', log_path=log,
+    )
+    with pytest.raises(tmux.TmuxError, match="already exists"):
+        tmux.open_window(
+            session=SESSION, window="dup", cwd=Path("/tmp"),
+            command='/bin/zsh -c "sleep 30"', log_path=log,
+        )
+
+
+def test_open_window_replace_succeeds_after_collision(tmp_path):
+    tmux.ensure_session(SESSION)
+    marker = tmp_path / "marker"
+    log = tmp_path / "log"
+    tmux.open_window(
+        session=SESSION, window="reuse", cwd=tmp_path,
+        command='/bin/zsh -c "sleep 30"', log_path=log,
+    )
+    # Replace and run a different command this time.
+    tmux.open_window(
+        session=SESSION, window="reuse", cwd=tmp_path,
+        command=f'/bin/zsh -c "echo replaced > {marker}"',
+        log_path=log,
+        replace=True,
+    )
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if marker.exists() and marker.read_text().strip() == "replaced":
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("replaced window did not run new command")
+    assert tmux.window_exists(SESSION, "reuse") is True
+
+
+def test_open_window_pipe_pane_writes_log(tmp_path):
+    tmux.ensure_session(SESSION)
+    log = tmp_path / "pipe.log"
+    tmux.open_window(
+        session=SESSION, window="piped", cwd=tmp_path,
+        command='/bin/zsh -c "echo unique-pipe-marker; sleep 5"',
+        log_path=log,
+    )
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if log.exists() and "unique-pipe-marker" in log.read_text():
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"pipe-pane log never received marker; got: {log.read_text() if log.exists() else '(no file)'}")
