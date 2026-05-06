@@ -1,0 +1,5 @@
+#!/bin/zsh
+# Backwards-compat alias: forwards to `oum-worker schedule`.
+print -u2 "[deprecated] oum-schedule → use 'oum-worker schedule' (forwarding)"
+ROOT="$(cd "$(dirname "$0")"/.. && pwd)"
+exec "$ROOT/scripts/oum-worker" schedule "$@"
