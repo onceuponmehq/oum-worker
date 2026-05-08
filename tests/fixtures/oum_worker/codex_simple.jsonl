@@ -1,0 +1,5 @@
+{"timestamp":"2026-05-08T10:00:00.000Z","type":"session_meta","payload":{"id":"019e0500-0000-0000-0000-000000000001","timestamp":"2026-05-08T10:00:00.000Z","cwd":"/tmp/codex-test-cwd","originator":"oum-worker-test","cli_version":"0.0.0"}}
+{"timestamp":"2026-05-08T10:01:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1","model_context_window":100000}}
+{"timestamp":"2026-05-08T10:01:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"hello codex"}}
+{"timestamp":"2026-05-08T10:01:30.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Hi there!","phase":"final","memory_citation":null}}
+{"timestamp":"2026-05-08T10:01:35.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"Hi there!"}}

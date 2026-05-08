@@ -1,0 +1,10 @@
+{"timestamp":"2026-05-08T10:00:00.000Z","type":"session_meta","payload":{"id":"019e0500-0000-0000-0000-000000000002","timestamp":"2026-05-08T10:00:00.000Z","cwd":"/tmp/codex-test-cwd","originator":"oum-worker-test","cli_version":"0.0.0"}}
+{"timestamp":"2026-05-08T10:01:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1","model_context_window":100000}}
+{"timestamp":"2026-05-08T10:01:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"list files and report"}}
+{"timestamp":"2026-05-08T10:01:05.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"need to list dir"}],"content":null,"encrypted_content":null}}
+{"timestamp":"2026-05-08T10:01:06.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls -la\"}","call_id":"call_001"}}
+{"timestamp":"2026-05-08T10:01:07.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_001","output":"file1.txt\nfile2.txt"}}
+{"timestamp":"2026-05-08T10:01:08.000Z","type":"event_msg","payload":{"type":"exec_command_end","call_id":"call_001","process_id":"123","turn_id":"t1","exit_code":0}}
+{"timestamp":"2026-05-08T10:01:30.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Found 2 files.","phase":"final","memory_citation":null}}
+{"timestamp":"2026-05-08T10:01:31.000Z","type":"response_item","payload":{"type":"reasoning","summary":[],"content":null,"encrypted_content":"AAAAencrypted"}}
+{"timestamp":"2026-05-08T10:01:35.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"Found 2 files."}}
