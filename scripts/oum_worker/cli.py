@@ -520,6 +520,44 @@ def _handle_kill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _do_attach(session: str, window: str) -> int:
+    """Focus the named tmux window then exec into `tmux attach`.
+
+    Split out so tests can monkeypatch this without execvp'ing tmux.
+    On success this never returns because os.execvp replaces the
+    process; the trailing 0 is only reached if execvp itself raises and
+    that exception propagates up.
+    """
+    tmux_bin = str(_tmux.find_tmux_bin())
+    subprocess.run([tmux_bin, "select-window", "-t", f"{session}:{window}"],
+                   check=False)
+    os.execvp(tmux_bin, [tmux_bin, "attach", "-t", session])
+    return 0
+
+
+def _handle_attach(args: argparse.Namespace) -> int:
+    workdir = workdir_from_args(args)
+    try:
+        s = state.read(workdir, args.label)
+    except state.WorkerNotFound:
+        print(f"no worker named {args.label!r}", file=sys.stderr)
+        return 1
+    if s.mode == "headless":
+        print(f"cannot attach to headless worker {args.label!r} "
+              f"(headless workers have no tmux window)", file=sys.stderr)
+        return 2
+    if not _tmux.window_exists(s.tmux_session, s.tmux_window):
+        print(f"worker {args.label!r} window is not alive "
+              f"(try respawning with 'oum-worker spawn ... --replace')",
+              file=sys.stderr)
+        return 2
+    if not sys.stdin.isatty():
+        print("attach requires a tty (you probably meant "
+              "'oum-worker send' or 'oum-worker ask')", file=sys.stderr)
+        return 2
+    return _do_attach(s.tmux_session, s.tmux_window)
+
+
 def _handle_logs(args: argparse.Namespace) -> int:
     workdir = workdir_from_args(args)
     try:
@@ -631,6 +669,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_logs.add_argument("--tail", action="store_true")
     sp_logs.add_argument("--launchd", action="store_true")
     sp_logs.set_defaults(_handler=_handle_logs)
+
+    sp_attach = sub.add_parser(
+        "attach",
+        help="Attach your terminal to a running interactive session.",
+    )
+    _add_global(sp_attach)
+    sp_attach.add_argument("--label", required=True)
+    sp_attach.set_defaults(_handler=_handle_attach)
 
     return p
 

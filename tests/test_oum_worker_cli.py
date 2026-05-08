@@ -475,3 +475,90 @@ def test_schedule_interactive_without_prompt_succeeds(tmp_path):
     parsed = plistlib.loads(plist_path.read_bytes())
     inner = " ".join(parsed["ProgramArguments"])
     assert "$(cat" not in inner
+
+
+# ---------- attach verb ----------
+
+
+def test_attach_unknown_label_exit_1(tmp_path):
+    (tmp_path / "logs").mkdir()
+    r = _run_cli("attach", "--label", "ghost",
+                 "--logs-dir", str(tmp_path / "logs"))
+    assert r.returncode == 1
+    assert "no worker named" in r.stderr or "ghost" in r.stderr
+
+
+def test_attach_headless_rejected(tmp_path):
+    workdir = tmp_path / "logs"
+    workdir.mkdir()
+    from oum_worker import state as _state
+    _state.create(workdir, label="hl", mode="headless", cwd=tmp_path,
+                  claude_bin="cc", tmux_session="x")
+    r = _run_cli("attach", "--label", "hl", "--logs-dir", str(workdir))
+    assert r.returncode == 2
+    assert "headless" in r.stderr.lower()
+
+
+def test_attach_dead_window_rejected(tmp_path):
+    """Worker exists in state.json but its tmux window doesn't — refuse."""
+    workdir = tmp_path / "logs"
+    workdir.mkdir()
+    from oum_worker import state as _state
+    _state.create(workdir, label="dead", mode="interactive", cwd=tmp_path,
+                  claude_bin="cc", tmux_session="oum-worker-no-such-session")
+    r = _run_cli("attach", "--label", "dead", "--logs-dir", str(workdir))
+    assert r.returncode == 2
+    assert "not alive" in r.stderr.lower() or "respawn" in r.stderr.lower()
+
+
+def test_attach_no_tty_rejected(tmp_path, monkeypatch):
+    """When stdin is not a tty (e.g. an agent calling attach), refuse early
+    so tmux doesn't hang on a non-interactive stdin.
+
+    Test in-process: monkeypatch window_exists to True so the no-tty gate
+    is the one that fires.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from oum_worker import cli as _cli
+    from oum_worker import tmux as _tmux_mod
+    from oum_worker import state as _state
+    workdir = tmp_path / "logs"
+    workdir.mkdir()
+    _state.create(workdir, label="alive", mode="interactive", cwd=tmp_path,
+                  claude_bin="cc", tmux_session="some-sess")
+    monkeypatch.setattr(_tmux_mod, "window_exists", lambda s, w: True)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    import argparse as _argparse
+    args = _argparse.Namespace(label="alive", logs_dir=str(workdir), config=None)
+    captured_err: list[str] = []
+    monkeypatch.setattr(sys, "stderr",
+                        type("E", (), {"write": lambda self, s: captured_err.append(s) or len(s)})())
+    rc = _cli._handle_attach(args)
+    assert rc == 2
+    assert any("tty" in line.lower() for line in captured_err)
+
+
+def test_attach_calls_tmux_when_all_gates_pass(tmp_path, monkeypatch):
+    """In-process: monkeypatch window_exists, isatty, and _do_attach so
+    the function body runs end-to-end without execvp."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from oum_worker import cli as _cli
+    from oum_worker import tmux as _tmux_mod
+    from oum_worker import state as _state
+    workdir = tmp_path / "logs"
+    workdir.mkdir()
+    _state.create(workdir, label="ok", mode="interactive", cwd=tmp_path,
+                  claude_bin="cc", tmux_session="some-sess")
+    monkeypatch.setattr(_tmux_mod, "window_exists", lambda s, w: True)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    captured: dict = {}
+    def fake_do_attach(session: str, window: str) -> int:
+        captured["session"] = session
+        captured["window"] = window
+        return 0
+    monkeypatch.setattr(_cli, "_do_attach", fake_do_attach)
+    import argparse as _argparse
+    args = _argparse.Namespace(label="ok", logs_dir=str(workdir), config=None)
+    rc = _cli._handle_attach(args)
+    assert rc == 0
+    assert captured == {"session": "some-sess", "window": "ok"}
