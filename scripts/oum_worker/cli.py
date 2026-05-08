@@ -213,13 +213,18 @@ def _handle_spawn(args: argparse.Namespace) -> int:
     cfg = config_from_args(args)
     workdir = workdir_from_args(args)
     cwd = _resolve_cwd(args, cfg)
-    claude_bin = _resolve_claude_bin(args, cfg)
+    engine_binary = _resolve_engine_binary(args, cfg, args.engine)
     tmux_session = _resolve_tmux_session(args, cfg)
     prompt = _read_prompt(args)
     if args.headless and not prompt:
         print("error: --headless requires --prompt or --prompt-file",
               file=sys.stderr)
         return 1
+
+    err = _verify_binary_exists(engine_binary, args.engine)
+    if err:
+        print(err, file=sys.stderr)
+        return 5
 
     try:
         env_pairs = launchd.parse_env_pairs(getattr(args, "env", None))
@@ -239,8 +244,9 @@ def _handle_spawn(args: argparse.Namespace) -> int:
             label=args.label,
             mode="headless" if args.headless else "interactive",
             cwd=cwd,
-            claude_bin=claude_bin,
+            claude_bin=engine_binary,
             tmux_session=tmux_session,
+            engine=args.engine,
         )
     except state.LabelExists:
         print(f"error: label {args.label!r} already exists (pass --replace to overwrite)",
@@ -256,19 +262,27 @@ def _handle_spawn(args: argparse.Namespace) -> int:
 
 def _spawn_interactive(args: argparse.Namespace, s: state.WorkerState,
                        *, env_pairs: dict[str, str] | None = None) -> int:
-    # Cold-start: empty prompt.md means the user just wants `claude` to
-    # open in tmux with no initial message. Pass prompt_file=None so the
-    # invocation skips the trailing `"$(cat ...)"` arg.
-    prompt_arg: Optional[Path] = (
-        Path(s.prompt_file)
-        if Path(s.prompt_file).read_text(encoding="utf-8")
-        else None
-    )
-    cc = launchd._cc_invocation(
-        claude_bin=s.claude_bin, resume=args.resume, new_session=args.new_session,
-        session_name=args.name, permission_mode=args.permission_mode,
-        skip_permissions=args.skip_permissions, prompt_file=prompt_arg,
+    from oum_worker import engines  # noqa: WPS433
+    eng = engines.get(s.engine or "claude")
+    # Cold-start: empty prompt.md means the user just wants the engine
+    # to open in tmux with no initial message.
+    prompt_text = Path(s.prompt_file).read_text(encoding="utf-8")
+    prompt_arg: Optional[Path] = Path(s.prompt_file) if prompt_text else None
+
+    yolo = eng.yolo_default if args.yolo is None else args.yolo
+    if args.skip_permissions:
+        yolo = True
+
+    cc = eng.build_invocation(
+        binary=s.claude_bin,
+        prompt_file=prompt_arg,
         headless=False,
+        resume=args.resume,
+        session_name=args.name if args.new_session else None,
+        model=args.model,
+        yolo=yolo,
+        permission_mode=args.permission_mode,
+        cwd=Path(s.cwd),
     )
     exports = launchd._env_export_prefix(env_pairs)
     inner = f"{exports}cd {shlex.quote(s.cwd)} && {cc}"
@@ -282,35 +296,47 @@ def _spawn_interactive(args: argparse.Namespace, s: state.WorkerState,
         replace=False,
     )
     state.update(workdir_from_args(args), s.label, started_at=state.utc_now_iso())
-    print(f"Spawned interactive worker {s.label}")
-    print(f"  Window: {s.tmux_session}:{s.tmux_window}  →  tmux a -t {s.tmux_session}")
+    print(f"Spawned interactive {s.engine} session {s.label}")
+    print(f"  Window: {s.tmux_session}:{s.tmux_window}  →  oum-worker attach --label {s.label}")
     print(f"  Log:    {s.tmux_log}")
     return 0
 
 
 def _spawn_headless(args: argparse.Namespace, s: state.WorkerState, prompt: str,
                     *, env_pairs: dict[str, str] | None = None) -> int:
-    cmd = [s.claude_bin, "-p"]
-    if args.resume:
-        cmd.extend(["--resume", args.resume])
-    if args.permission_mode:
-        cmd.extend(["--permission-mode", args.permission_mode])
+    from oum_worker import engines  # noqa: WPS433
+    eng = engines.get(s.engine or "claude")
+    yolo = eng.yolo_default if args.yolo is None else args.yolo
     if args.skip_permissions:
-        cmd.append("--dangerously-skip-permissions")
-    cmd.append(prompt)
+        yolo = True
+
+    inner = eng.build_invocation(
+        binary=s.claude_bin,
+        prompt_file=Path(s.prompt_file),
+        headless=True,
+        resume=args.resume,
+        session_name=None,  # claude --name only meaningful in interactive
+        model=args.model,
+        yolo=yolo,
+        permission_mode=args.permission_mode,
+        cwd=Path(s.cwd),
+    )
+
+    response_path = Path(s.tmux_log).parent / "response.txt"
+    state.update(workdir_from_args(args), s.label, started_at=state.utc_now_iso())
 
     subprocess_env: dict[str, str] | None = None
     if env_pairs:
         subprocess_env = {**os.environ, **env_pairs}
 
-    response_path = Path(s.tmux_log).parent / "response.txt"
-    state.update(workdir_from_args(args), s.label, started_at=state.utc_now_iso())
+    cmd = ["/bin/zsh", "-lic", f"cd {shlex.quote(s.cwd)} && {inner}"]
     with open(response_path, "w") as out:
         r = subprocess.run(cmd, cwd=s.cwd, stdout=out, stderr=subprocess.STDOUT,
                            env=subprocess_env)
     state.update(workdir_from_args(args), s.label, ended_at=state.utc_now_iso())
     if r.returncode != 0:
-        print(f"headless worker {s.label} exited {r.returncode}", file=sys.stderr)
+        print(f"headless {s.engine} session {s.label} exited {r.returncode}",
+              file=sys.stderr)
         return 4
     print(response_path.read_text())
     return 0
@@ -320,13 +346,18 @@ def _handle_schedule(args: argparse.Namespace) -> int:
     cfg = config_from_args(args)
     workdir = workdir_from_args(args)
     cwd = _resolve_cwd(args, cfg)
-    claude_bin = _resolve_claude_bin(args, cfg)
+    engine_binary = _resolve_engine_binary(args, cfg, args.engine)
     tmux_session = _resolve_tmux_session(args, cfg)
     prompt = _read_prompt(args)
     if args.headless and not prompt:
         print("error: --headless requires --prompt or --prompt-file",
               file=sys.stderr)
         return 1
+
+    err = _verify_binary_exists(engine_binary, args.engine)
+    if err:
+        print(err, file=sys.stderr)
+        return 5
 
     try:
         env_pairs = launchd.parse_env_pairs(getattr(args, "env", None))
@@ -343,7 +374,8 @@ def _handle_schedule(args: argparse.Namespace) -> int:
     try:
         s = state.create(
             workdir, label=args.label, mode="scheduled", cwd=cwd,
-            claude_bin=claude_bin, tmux_session=tmux_session,
+            claude_bin=engine_binary, tmux_session=tmux_session,
+            engine=args.engine,
         )
     except state.LabelExists:
         print(f"error: label {args.label!r} already exists", file=sys.stderr)
@@ -355,17 +387,20 @@ def _handle_schedule(args: argparse.Namespace) -> int:
     plist_path = Path(args.launch_agents_dir).expanduser() / f"{launchd_label}.plist"
 
     # Interactive cold-start (empty prompt) → prompt_file=None so the tmux
-    # pane runs plain `claude`. Headless always has a non-empty prompt
+    # pane runs the engine cold. Headless always has a non-empty prompt
     # because the gate above rejected empty headless invocations.
     prompt_arg: Optional[Path] = Path(s.prompt_file) if prompt else None
     inner_cmd = launchd.build_inner_command(
-        cwd=cwd, claude_bin=claude_bin, prompt_file=prompt_arg,
+        cwd=cwd, claude_bin=engine_binary, prompt_file=prompt_arg,
         log_path=Path(s.tmux_log), label=args.label, logs_dir=workdir,
         resume=args.resume, new_session=args.new_session, session_name=args.name,
         permission_mode=args.permission_mode, skip_permissions=args.skip_permissions,
         tmux_session=tmux_session, headless=args.headless,
         env_pairs=env_pairs,
         scripts_dir=cfg.scripts_dir,
+        engine=args.engine,
+        model=args.model,
+        yolo=args.yolo,
     )
     payload = launchd.build_plist(
         label=launchd_label, cwd=cwd, command=inner_cmd, target=target,

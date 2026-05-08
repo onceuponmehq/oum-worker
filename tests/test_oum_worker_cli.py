@@ -562,3 +562,121 @@ def test_attach_calls_tmux_when_all_gates_pass(tmp_path, monkeypatch):
     rc = _cli._handle_attach(args)
     assert rc == 0
     assert captured == {"session": "some-sess", "window": "ok"}
+
+
+# ---------- engine: codex spawn / schedule ----------
+
+
+@pytest.mark.skipif(TMUX_BIN is None, reason="tmux required")
+def test_spawn_codex_writes_engine_in_state(tmp_path):
+    stub = tmp_path / "stub-codex"
+    stub.write_text('#!/bin/zsh\nsleep 30\n')
+    stub.chmod(0o755)
+    try:
+        r = _run_cli(
+            "spawn",
+            "--label", "cx",
+            "--new",
+            "--engine", "codex",
+            "--codex-bin", str(stub),
+            "--tmux-session", TEST_TMUX_SESSION,
+            "--cwd", str(tmp_path),
+            "--logs-dir", str(tmp_path / "logs"),
+        )
+        assert r.returncode == 0, r.stderr
+        data = _json.loads((tmp_path / "logs" / "cx" / "state.json").read_text())
+        assert data["engine"] == "codex"
+    finally:
+        _cleanup_tmux()
+
+
+def test_spawn_codex_headless_requires_prompt(tmp_path):
+    """`--engine codex --headless` without --prompt should exit cleanly."""
+    stub = tmp_path / "stub-codex"
+    stub.write_text('#!/bin/zsh\nexit 0\n')
+    stub.chmod(0o755)
+    r = _run_cli(
+        "spawn",
+        "--label", "cx-hl",
+        "--new",
+        "--engine", "codex",
+        "--headless",
+        "--codex-bin", str(stub),
+        "--cwd", str(tmp_path),
+        "--logs-dir", str(tmp_path / "logs"),
+    )
+    assert r.returncode == 1
+    assert "prompt" in r.stderr.lower()
+
+
+def test_spawn_codex_binary_missing_errors_early(tmp_path):
+    r = _run_cli(
+        "spawn",
+        "--label", "cx-missing",
+        "--new",
+        "--engine", "codex",
+        "--codex-bin", "/no/such/codex",
+        "--cwd", str(tmp_path),
+        "--logs-dir", str(tmp_path / "logs"),
+    )
+    assert r.returncode == 5
+    assert "codex" in r.stderr.lower()
+    assert "not found" in r.stderr.lower()
+
+
+def test_schedule_codex_inner_command_has_yolo(tmp_path):
+    plist_dir = tmp_path / "LaunchAgents"
+    stub = tmp_path / "stub-codex"
+    stub.write_text('#!/bin/zsh\nexit 0\n')
+    stub.chmod(0o755)
+    r = _run_cli(
+        "schedule",
+        "--in", "1h",
+        "--label", "cx-sched",
+        "--new",
+        "--engine", "codex",
+        "--codex-bin", str(stub),
+        "--prompt", "hello",
+        "--launch-agents-dir", str(plist_dir),
+        "--no-bootstrap",
+        "--cwd", str(tmp_path),
+        "--tmux-session", TEST_TMUX_SESSION,
+        "--logs-dir", str(tmp_path / "logs"),
+    )
+    assert r.returncode == 0, r.stderr
+    import plistlib
+    data = _json.loads((tmp_path / "logs" / "cx-sched" / "state.json").read_text())
+    plist_path = plist_dir / (data["launchd_label"] + ".plist")
+    parsed = plistlib.loads(plist_path.read_bytes())
+    inner = " ".join(parsed["ProgramArguments"])
+    assert "--yolo" in inner
+    assert data["engine"] == "codex"
+
+
+def test_schedule_codex_no_yolo_strips_flag(tmp_path):
+    plist_dir = tmp_path / "LaunchAgents"
+    stub = tmp_path / "stub-codex"
+    stub.write_text('#!/bin/zsh\nexit 0\n')
+    stub.chmod(0o755)
+    r = _run_cli(
+        "schedule",
+        "--in", "1h",
+        "--label", "cx-sched-noyolo",
+        "--new",
+        "--engine", "codex",
+        "--no-yolo",
+        "--codex-bin", str(stub),
+        "--prompt", "hello",
+        "--launch-agents-dir", str(plist_dir),
+        "--no-bootstrap",
+        "--cwd", str(tmp_path),
+        "--tmux-session", TEST_TMUX_SESSION,
+        "--logs-dir", str(tmp_path / "logs"),
+    )
+    assert r.returncode == 0, r.stderr
+    import plistlib
+    data = _json.loads((tmp_path / "logs" / "cx-sched-noyolo" / "state.json").read_text())
+    plist_path = plist_dir / (data["launchd_label"] + ".plist")
+    parsed = plistlib.loads(plist_path.read_bytes())
+    inner = " ".join(parsed["ProgramArguments"])
+    assert "--yolo" not in inner
