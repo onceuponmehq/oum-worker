@@ -1,15 +1,16 @@
 # oum-worker
 
-`oum-worker` is a small macOS CLI for managing Claude Code worker sessions from scripts and orchestrators.
+`oum-worker` is a small macOS CLI for managing Claude Code sessions — both interactive sessions you drive yourself and headless workers driven by orchestrators.
 
 It provides primitives to:
 
-- spawn Claude Code now in `tmux` or headless mode
-- schedule a worker for later with `launchd`
-- send follow-up messages to a live worker
-- wait until the worker is idle
+- spawn Claude Code now in `tmux` (with or without a starting prompt) or headless mode
+- attach your terminal to a running interactive session
+- schedule a session for later with `launchd`
+- send follow-up messages to a live session
+- wait until the session is idle
 - capture the latest assistant response from Claude Code JSONL session files
-- list, inspect, tail, and kill managed workers
+- list, inspect, tail, and kill managed sessions
 
 The CLI is intentionally not tied to any private task schema. Deployment-specific details such as repo aliases, logs directory, launchd label prefix, timezone, PATH, tmux session, and Claude binary come from config.
 
@@ -63,6 +64,15 @@ oum-worker --config .oum-worker.json schedule \
   --prompt "Run the nightly summary."
 ```
 
+Or drop into a fresh interactive Claude Code session in tmux with no initial prompt:
+
+```bash
+oum-worker --config .oum-worker.json spawn  --label adhoc --new
+oum-worker --config .oum-worker.json attach --label adhoc
+```
+
+Detach with `Ctrl-B D` and re-attach later with the same `attach` command.
+
 Inspect and clean up:
 
 ```bash
@@ -115,8 +125,9 @@ Environment overrides:
 ## Commands
 
 ```bash
-oum-worker spawn    --label <label> (--new | --resume <session-id>) (--prompt TEXT | --prompt-file PATH)
-oum-worker schedule --label <label> (--in 30m | --at 18:00) (--new | --resume <session-id>) (--prompt TEXT | --prompt-file PATH)
+oum-worker spawn    --label <label> (--new | --resume <session-id>) [--prompt TEXT | --prompt-file PATH] [--headless]
+oum-worker schedule --label <label> (--in 30m | --at 18:00) (--new | --resume <session-id>) [--prompt TEXT | --prompt-file PATH] [--headless]
+oum-worker attach   --label <label>
 oum-worker send     --label <label> "message"
 oum-worker capture  --label <label> [--full] [--include-thinking] [--include-tool-use]
 oum-worker wait     --label <label> [--timeout 600] [--stable-ms 1500]
@@ -126,6 +137,10 @@ oum-worker status   --label <label> [--json]
 oum-worker logs     --label <label> [--tail] [--launchd]
 oum-worker kill     --label <label> [--purge]
 ```
+
+`--prompt` / `--prompt-file` is required for `--headless`. For interactive
+spawn or schedule it is optional — omitting it opens `claude` cold in the
+tmux pane. `attach` requires a tty and refuses headless workers.
 
 ## Development
 
