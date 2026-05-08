@@ -130,7 +130,9 @@ def _add_spawn_args(sp: argparse.ArgumentParser) -> None:
     g = sp.add_mutually_exclusive_group(required=True)
     g.add_argument("--new", dest="new_session", action="store_true")
     g.add_argument("--resume", help="Claude session id to resume")
-    p = sp.add_mutually_exclusive_group(required=True)
+    # Optional: required for --headless (gated in handlers), free for
+    # interactive — a cold-start session opens `claude` with no prompt.
+    p = sp.add_mutually_exclusive_group(required=False)
     p.add_argument("--prompt")
     p.add_argument("--prompt-file")
     mode = sp.add_mutually_exclusive_group()
@@ -168,8 +170,9 @@ def _handle_spawn(args: argparse.Namespace) -> int:
     claude_bin = _resolve_claude_bin(args, cfg)
     tmux_session = _resolve_tmux_session(args, cfg)
     prompt = _read_prompt(args)
-    if not prompt:
-        print("error: prompt is empty", file=sys.stderr)
+    if args.headless and not prompt:
+        print("error: --headless requires --prompt or --prompt-file",
+              file=sys.stderr)
         return 1
 
     try:
@@ -207,10 +210,18 @@ def _handle_spawn(args: argparse.Namespace) -> int:
 
 def _spawn_interactive(args: argparse.Namespace, s: state.WorkerState,
                        *, env_pairs: dict[str, str] | None = None) -> int:
+    # Cold-start: empty prompt.md means the user just wants `claude` to
+    # open in tmux with no initial message. Pass prompt_file=None so the
+    # invocation skips the trailing `"$(cat ...)"` arg.
+    prompt_arg: Optional[Path] = (
+        Path(s.prompt_file)
+        if Path(s.prompt_file).read_text(encoding="utf-8")
+        else None
+    )
     cc = launchd._cc_invocation(
         claude_bin=s.claude_bin, resume=args.resume, new_session=args.new_session,
         session_name=args.name, permission_mode=args.permission_mode,
-        skip_permissions=args.skip_permissions, prompt_file=Path(s.prompt_file),
+        skip_permissions=args.skip_permissions, prompt_file=prompt_arg,
         headless=False,
     )
     exports = launchd._env_export_prefix(env_pairs)
@@ -266,8 +277,9 @@ def _handle_schedule(args: argparse.Namespace) -> int:
     claude_bin = _resolve_claude_bin(args, cfg)
     tmux_session = _resolve_tmux_session(args, cfg)
     prompt = _read_prompt(args)
-    if not prompt:
-        print("error: prompt is empty", file=sys.stderr)
+    if args.headless and not prompt:
+        print("error: --headless requires --prompt or --prompt-file",
+              file=sys.stderr)
         return 1
 
     try:
@@ -296,8 +308,12 @@ def _handle_schedule(args: argparse.Namespace) -> int:
     launchd_label = launchd.normalize_label(args.label, cfg=cfg)
     plist_path = Path(args.launch_agents_dir).expanduser() / f"{launchd_label}.plist"
 
+    # Interactive cold-start (empty prompt) → prompt_file=None so the tmux
+    # pane runs plain `claude`. Headless always has a non-empty prompt
+    # because the gate above rejected empty headless invocations.
+    prompt_arg: Optional[Path] = Path(s.prompt_file) if prompt else None
     inner_cmd = launchd.build_inner_command(
-        cwd=cwd, claude_bin=claude_bin, prompt_file=Path(s.prompt_file),
+        cwd=cwd, claude_bin=claude_bin, prompt_file=prompt_arg,
         log_path=Path(s.tmux_log), label=args.label, logs_dir=workdir,
         resume=args.resume, new_session=args.new_session, session_name=args.name,
         permission_mode=args.permission_mode, skip_permissions=args.skip_permissions,

@@ -403,3 +403,75 @@ def test_logs_prints_path(tmp_path):
     r = _run_cli("logs", "--label", "logs-test", "--logs-dir", str(workdir))
     assert r.returncode == 0
     assert s.tmux_log in r.stdout
+
+
+# ---------- prompt-optional for interactive ----------
+
+
+@pytest.mark.skipif(TMUX_BIN is None, reason="tmux required")
+def test_spawn_interactive_without_prompt_succeeds(tmp_path):
+    """Cold-start: --interactive with no --prompt opens claude in tmux.
+
+    Uses a stub `claude` so the test doesn't actually start Claude Code.
+    """
+    stub = tmp_path / "stub-cc"
+    stub.write_text('#!/bin/zsh\nsleep 30\n')
+    stub.chmod(0o755)
+    try:
+        r = _run_cli(
+            "spawn",
+            "--label", "cold-start",
+            "--new",
+            "--cc-command", str(stub),
+            "--tmux-session", TEST_TMUX_SESSION,
+            "--cwd", str(tmp_path),
+            "--logs-dir", str(tmp_path / "logs"),
+        )
+        assert r.returncode == 0, r.stderr
+        sj = tmp_path / "logs" / "cold-start" / "state.json"
+        assert sj.exists()
+        prompt_md = tmp_path / "logs" / "cold-start" / "prompt.md"
+        assert prompt_md.exists()
+        assert prompt_md.read_text() == ""
+    finally:
+        _cleanup_tmux()
+
+
+def test_spawn_headless_without_prompt_fails(tmp_path):
+    """Headless still requires a prompt — there's nothing to send to claude -p."""
+    r = _run_cli(
+        "spawn",
+        "--label", "headless-no-prompt",
+        "--new",
+        "--headless",
+        "--cwd", str(tmp_path),
+        "--logs-dir", str(tmp_path / "logs"),
+    )
+    assert r.returncode == 1
+    assert "prompt" in r.stderr.lower()
+
+
+def test_schedule_interactive_without_prompt_succeeds(tmp_path):
+    """Scheduled interactive can also cold-start; the plist's inner command
+    must NOT contain a `cat <prompt-file>` substitution."""
+    plist_dir = tmp_path / "LaunchAgents"
+    r = _run_cli(
+        "schedule",
+        "--in", "1h",
+        "--label", "sched-cold",
+        "--new",
+        "--launch-agents-dir", str(plist_dir),
+        "--no-bootstrap",
+        "--cwd", str(tmp_path),
+        "--tmux-session", TEST_TMUX_SESSION,
+        "--logs-dir", str(tmp_path / "logs"),
+    )
+    assert r.returncode == 0, r.stderr
+    sj = tmp_path / "logs" / "sched-cold" / "state.json"
+    data = _json.loads(sj.read_text())
+    import plistlib
+    plist_path = plist_dir / (data["launchd_label"] + ".plist")
+    assert plist_path.exists()
+    parsed = plistlib.loads(plist_path.read_bytes())
+    inner = " ".join(parsed["ProgramArguments"])
+    assert "$(cat" not in inner
