@@ -155,3 +155,40 @@ def test_utc_now_iso_uses_single_now_call():
     assert s.endswith("Z")
     parsed = _dt.fromisoformat(s.replace("Z", "+00:00"))
     assert parsed.tzinfo is not None
+
+
+def test_engine_round_trips(tmp_path):
+    """create with engine='codex' -> read returns engine='codex'."""
+    s = state.create(tmp_path, label="cx", mode="interactive", cwd=tmp_path,
+                     claude_bin="codex", tmux_session="x", engine="codex")
+    assert s.engine == "codex"
+    s2 = state.read(tmp_path, "cx")
+    assert s2.engine == "codex"
+
+
+def test_engine_defaults_to_claude_when_missing(tmp_path):
+    """A legacy state.json without `engine` should read as engine='claude'."""
+    wd = tmp_path / "legacy"
+    wd.mkdir()
+    state_path = wd / "state.json"
+    state_path.write_text(json.dumps({
+        "label": "legacy",
+        "mode": "interactive",
+        "tmux_session": "x",
+        "tmux_window": "legacy",
+        "cwd": str(tmp_path),
+        "claude_bin": "claude",
+        "prompt_file": str(wd / "prompt.md"),
+        "tmux_log": str(wd / "tmux.log"),
+        "launchd_label": None,
+        "plist_path": None,
+        "session_id": None,
+        "jsonl_path": None,
+        "created_at": "2026-05-08T00:00:00.000Z",
+        "started_at": None,
+        "ended_at": None,
+        "last_send_at": None,
+        "last_capture_at": None,
+    }))
+    s = state.read(tmp_path, "legacy")
+    assert s.engine == "claude"

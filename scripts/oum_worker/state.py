@@ -71,6 +71,9 @@ class WorkerState:
     ended_at: Optional[str]
     last_send_at: Optional[str]
     last_capture_at: Optional[str]
+    # Per-label engine selector. Defaults to 'claude' so legacy
+    # state.json files (without this field) round-trip cleanly.
+    engine: str = "claude"
 
 
 _FIELD_NAMES = {f.name for f in fields(WorkerState)}
@@ -95,6 +98,7 @@ def create(
     tmux_window: Optional[str] = None,
     launchd_label: Optional[str] = None,
     plist_path: Optional[str] = None,
+    engine: str = "claude",
 ) -> WorkerState:
     wd = worker_dir(workdir, label)
     if state_path(workdir, label).exists():
@@ -118,6 +122,7 @@ def create(
         ended_at=None,
         last_send_at=None,
         last_capture_at=None,
+        engine=engine,
     )
     _write_locked(state_path(workdir, label), s)
     return s
@@ -136,7 +141,12 @@ def read(workdir: Path, label: str) -> WorkerState:
                 raise WorkerNotFound(label) from e
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-    return WorkerState(**{k: data.get(k) for k in _FIELD_NAMES})
+    fields_data = {k: data.get(k) for k in _FIELD_NAMES}
+    # Legacy state.json files predate the `engine` field; coerce
+    # missing/None to 'claude' so existing labels keep working.
+    if fields_data.get("engine") is None:
+        fields_data["engine"] = "claude"
+    return WorkerState(**fields_data)
 
 
 def update(workdir: Path, label: str, **changes) -> WorkerState:
@@ -157,7 +167,10 @@ def update(workdir: Path, label: str, **changes) -> WorkerState:
             f.write("\n")
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-    return WorkerState(**{k: data.get(k) for k in _FIELD_NAMES})
+    fields_data = {k: data.get(k) for k in _FIELD_NAMES}
+    if fields_data.get("engine") is None:
+        fields_data["engine"] = "claude"
+    return WorkerState(**fields_data)
 
 
 def _write_locked(path: Path, s: WorkerState) -> None:
