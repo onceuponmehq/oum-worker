@@ -1,13 +1,27 @@
 ---
 name: oum-worker
-description: Use when scheduling, spawning, attaching to, sending to, capturing from, waiting on, asking, listing, killing, or checking status of Claude Code sessions. Replaces and supersedes `oum-schedule`.
+description: Use when scheduling, spawning, attaching to, sending to, capturing from, waiting on, asking, listing, killing, or checking status of Claude Code or Codex sessions. Pass --engine codex to use Codex CLI; default is Claude Code. Replaces and supersedes `oum-schedule`.
 ---
 
 # oum-worker
 
-Use this skill to manage Claude Code sessions. A session is a Claude Code process running in a configured tmux session, identified by a caller-supplied label. Some sessions are scheduled (launchd), some are spawned now, some are headless one-shots (`claude -p`). The same CLI is used for human-driven interactive sessions and agent-driven automation.
+Use this skill to manage Claude Code or Codex sessions. A session is a CLI process running in a configured tmux session, identified by a caller-supplied label. Some sessions are scheduled (launchd), some are spawned now, some are headless one-shots (`claude -p` / `codex exec`). The same CLI is used for human-driven interactive sessions and agent-driven automation.
 
-Use `oum-worker` if installed from `pyproject.toml`; in a source checkout, `scripts/oum-worker` is the wrapper. Private deployment details such as repo aliases, timezone, launchd prefix, logs dir, tmux session, and Claude binary must come from `--config`, `OUM_WORKER_CONFIG`, or environment variables.
+Use `oum-worker` if installed from `pyproject.toml`; in a source checkout, `scripts/oum-worker` is the wrapper. Private deployment details such as repo aliases, timezone, launchd prefix, logs dir, tmux session, and CLI binaries must come from `--config`, `OUM_WORKER_CONFIG`, or environment variables.
+
+## Engines
+
+`oum-worker` drives two CLIs interchangeably:
+
+- **Claude Code** (default; `--engine claude`) — uses `claude`. YOLO is opt-in via `--yolo` or `--dangerously-skip-permissions`.
+- **Codex CLI** (`--engine codex`) — uses `codex`. **YOLO is on by default** (passes `--yolo`); opt out with `--no-yolo`. Codex sessions live at `~/.codex/sessions/<YYYY>/<MM>/<DD>/`.
+
+Every label is bound to one engine for its lifetime. To switch engines, respawn with `--replace --engine <other>`. The engine is recorded in `state.json` and downstream verbs (`capture`, `wait`, `ask`) automatically dispatch to the right session-log parser.
+
+Engine-specific flags emit a stderr warning when passed against the wrong engine and are then ignored:
+
+- claude-only: `--name`, `--permission-mode`, `--dangerously-skip-permissions`, `--cc-command` / `--claude-bin`
+- codex-only: `--model`, `--codex-bin`
 
 ## When to use which verb
 
@@ -55,6 +69,20 @@ oum-worker --config .oum-worker.json spawn  --label adhoc --new
 oum-worker --config .oum-worker.json attach --label adhoc
 ```
 
+Spawn a codex interactive session (yolo on by default) and attach:
+
+```bash
+oum-worker --config .oum-worker.json spawn  --label cx --new --engine codex
+oum-worker --config .oum-worker.json attach --label cx
+```
+
+Spawn a codex headless session and capture the reply:
+
+```bash
+oum-worker --config .oum-worker.json spawn   --label cx-h --new --engine codex --headless --prompt "summarize repo"
+oum-worker --config .oum-worker.json capture --label cx-h
+```
+
 List and inspect:
 
 ```bash
@@ -73,6 +101,8 @@ oum-worker --config .oum-worker.json logs --label feature-014 --tail
 - If `oum-schedule` was previously used, prefer `oum-worker schedule` (the alias still works but prints a deprecation hint).
 - If you spawn an interactive session without `--prompt`, `capture` / `wait` / `ask` cannot resolve the session id until the session has produced its first user message. Either pass `--prompt` up front, or send a real first message via `oum-worker send` before calling `capture` / `ask`.
 - `attach` requires a tty and refuses on headless sessions; it is for human attachment, not orchestrators. Orchestrators use `send` / `ask`.
+- Codex's YOLO mode (`--yolo`, an alias for `--dangerously-bypass-approvals-and-sandbox`) bypasses approvals AND the sandbox. Default-on for codex was an explicit project decision; pass `--no-yolo` if you don't want it.
+- A label is bound to one engine for its lifetime. To swap engines, respawn with `--replace --engine <other>`; the prompt and session id are reset.
 
 ## State on disk
 

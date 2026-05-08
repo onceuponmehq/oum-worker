@@ -1,18 +1,18 @@
 # oum-worker
 
-`oum-worker` is a small macOS CLI for managing Claude Code sessions — both interactive sessions you drive yourself and headless workers driven by orchestrators.
+`oum-worker` is a small macOS CLI for managing Claude Code or Codex CLI sessions — both interactive sessions you drive yourself and headless workers driven by orchestrators.
 
 It provides primitives to:
 
-- spawn Claude Code now in `tmux` (with or without a starting prompt) or headless mode
+- spawn Claude Code or Codex now in `tmux` (with or without a starting prompt) or headless mode
 - attach your terminal to a running interactive session
 - schedule a session for later with `launchd`
 - send follow-up messages to a live session
-- wait until the session is idle
-- capture the latest assistant response from Claude Code JSONL session files
+- wait until the session is idle (engine-aware: `end_turn` for Claude, `task_complete` for Codex)
+- capture the latest assistant response from the engine's JSONL session files
 - list, inspect, tail, and kill managed sessions
 
-The CLI is intentionally not tied to any private task schema. Deployment-specific details such as repo aliases, logs directory, launchd label prefix, timezone, PATH, tmux session, and Claude binary come from config.
+The CLI is intentionally not tied to any private task schema. Deployment-specific details such as repo aliases, logs directory, launchd label prefix, timezone, PATH, tmux session, and CLI binaries come from config.
 
 ## Install
 
@@ -26,7 +26,8 @@ Runtime dependencies:
 
 - macOS for `launchd` scheduling
 - `tmux` for interactive workers
-- Claude Code CLI available as `claude`, `cc`, or a configured path
+- Claude Code CLI available as `claude`, `cc`, or a configured path (for `--engine claude`, default)
+- Codex CLI available as `codex` or a configured path (for `--engine codex`)
 - Python 3.11+
 
 ## Quick Start
@@ -72,6 +73,13 @@ oum-worker --config .oum-worker.json attach --label adhoc
 ```
 
 Detach with `Ctrl-B D` and re-attach later with the same `attach` command.
+
+Spawn a Codex CLI session (yolo on by default; `--no-yolo` to opt out):
+
+```bash
+oum-worker --config .oum-worker.json spawn  --label cx --new --engine codex
+oum-worker --config .oum-worker.json attach --label cx
+```
 
 Inspect and clean up:
 
@@ -125,8 +133,8 @@ Environment overrides:
 ## Commands
 
 ```bash
-oum-worker spawn    --label <label> (--new | --resume <session-id>) [--prompt TEXT | --prompt-file PATH] [--headless]
-oum-worker schedule --label <label> (--in 30m | --at 18:00) (--new | --resume <session-id>) [--prompt TEXT | --prompt-file PATH] [--headless]
+oum-worker spawn    --label <label> [--engine claude|codex] (--new | --resume <session-id>) [--prompt TEXT | --prompt-file PATH] [--headless] [--yolo|--no-yolo] [--model M]
+oum-worker schedule --label <label> [--engine claude|codex] (--in 30m | --at 18:00) (--new | --resume <session-id>) [--prompt TEXT | --prompt-file PATH] [--headless] [--yolo|--no-yolo] [--model M]
 oum-worker attach   --label <label>
 oum-worker send     --label <label> "message"
 oum-worker capture  --label <label> [--full] [--include-thinking] [--include-tool-use]
@@ -139,8 +147,15 @@ oum-worker kill     --label <label> [--purge]
 ```
 
 `--prompt` / `--prompt-file` is required for `--headless`. For interactive
-spawn or schedule it is optional — omitting it opens `claude` cold in the
-tmux pane. `attach` requires a tty and refuses headless workers.
+spawn or schedule it is optional — omitting it opens the engine cold in
+the tmux pane. `attach` requires a tty and refuses headless workers.
+
+`--engine claude` is the default; `--engine codex` runs the Codex CLI.
+For codex, `--yolo` is on by default (passes `--yolo`, an alias for
+`--dangerously-bypass-approvals-and-sandbox`); pass `--no-yolo` if you
+don't want it. Codex sessions read from `~/.codex/sessions/<YYYY>/<MM>/<DD>/`
+for `capture` / `wait` / `ask`. A label is bound to one engine for its
+lifetime; respawn with `--replace --engine <other>` to switch.
 
 ## Development
 
