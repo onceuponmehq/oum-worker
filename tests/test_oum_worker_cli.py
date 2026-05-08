@@ -680,3 +680,72 @@ def test_schedule_codex_no_yolo_strips_flag(tmp_path):
     parsed = plistlib.loads(plist_path.read_bytes())
     inner = " ".join(parsed["ProgramArguments"])
     assert "--yolo" not in inner
+
+
+# ---------- engine: codex capture / wait ----------
+
+
+def _materialize_codex_session(home: Path, real_cwd: Path,
+                                fixture_path: Path, sid: str) -> Path:
+    sess_dir = home / ".codex" / "sessions" / "2026" / "05" / "08"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    target = sess_dir / f"rollout-2026-05-08T10-00-00-{sid}.jsonl"
+    raw = fixture_path.read_text()
+    raw = raw.replace("/tmp/codex-test-cwd", str(real_cwd.resolve()))
+    raw = raw.replace("019e0500-0000-0000-0000-000000000001", sid)
+    target.write_text(raw)
+    return target
+
+
+def test_capture_codex_uses_codex_jsonl(tmp_path, monkeypatch):
+    """Capture on a codex worker reads codex_jsonl, not jsonl."""
+    fake_home = tmp_path / "fake-home"
+    workdir = tmp_path / "logs"
+    workdir.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+
+    sid = "019e0500-0000-0000-0000-000000000099"
+    fixture = ROOT / "tests" / "fixtures" / "oum_worker" / "codex_simple.jsonl"
+    _materialize_codex_session(fake_home, cwd, fixture, sid)
+
+    from oum_worker import state as _state
+    s = _state.create(workdir, label="cx-cap", mode="interactive",
+                      cwd=cwd, claude_bin="codex", tmux_session="x",
+                      engine="codex")
+    Path(s.prompt_file).write_text("hello codex", encoding="utf-8")
+    _state.update(workdir, "cx-cap",
+                  last_send_at="2026-05-08T10:00:30.000Z")
+
+    r = _run_cli("capture", "--label", "cx-cap",
+                 "--logs-dir", str(workdir),
+                 env={**os.environ, "HOME": str(fake_home)})
+    assert r.returncode == 0, r.stderr
+    assert "Hi there!" in r.stdout
+
+
+def test_wait_codex_returns_zero_on_task_complete(tmp_path, monkeypatch):
+    fake_home = tmp_path / "fake-home"
+    workdir = tmp_path / "logs"
+    workdir.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+
+    sid = "019e0500-0000-0000-0000-000000000098"
+    fixture = ROOT / "tests" / "fixtures" / "oum_worker" / "codex_simple.jsonl"
+    sess_path = _materialize_codex_session(fake_home, cwd, fixture, sid)
+
+    from oum_worker import state as _state
+    s = _state.create(workdir, label="cx-wait", mode="headless",
+                      cwd=cwd, claude_bin="codex", tmux_session="x",
+                      engine="codex")
+    Path(s.prompt_file).write_text("hello codex", encoding="utf-8")
+    _state.update(workdir, "cx-wait", session_id=sid,
+                  jsonl_path=str(sess_path),
+                  last_send_at="2026-05-08T10:00:30.000Z")
+
+    r = _run_cli("wait", "--label", "cx-wait",
+                 "--timeout", "3", "--stable-ms", "200", "--poll-ms", "100",
+                 "--logs-dir", str(workdir),
+                 env={**os.environ, "HOME": str(fake_home)})
+    assert r.returncode == 0, r.stderr

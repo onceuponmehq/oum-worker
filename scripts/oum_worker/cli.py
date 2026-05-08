@@ -116,11 +116,13 @@ def _resolve_tmux_session(args: argparse.Namespace,
 def _resolve_session_id(workdir: Path, s: state.WorkerState) -> state.WorkerState:
     if s.session_id:
         return s
+    from oum_worker import engines  # noqa: WPS433
+    engine_mod = engines.get(s.engine or "claude").jsonl_module
     prompt = Path(s.prompt_file).read_text(encoding="utf-8") if Path(s.prompt_file).exists() else ""
-    sid = jsonl.discover_by_prompt(Path(s.cwd), prompt, created_at=s.created_at)
+    sid = engine_mod.discover_by_prompt(Path(s.cwd), prompt, created_at=s.created_at)
     if not sid:
         return s
-    jsonl_path = jsonl.find_by_session_id(Path(s.cwd), sid)
+    jsonl_path = engine_mod.find_by_session_id(Path(s.cwd), sid)
     state.update(workdir, s.label,
                  session_id=sid,
                  jsonl_path=str(jsonl_path) if jsonl_path else None)
@@ -457,11 +459,13 @@ def _handle_capture(args: argparse.Namespace) -> int:
     s = _resolve_session_id(workdir, s)
     if not s.jsonl_path:
         return 0
+    from oum_worker import engines  # noqa: WPS433
+    engine_mod = engines.get(s.engine or "claude").jsonl_module
     since = args.since or s.last_send_at or s.created_at
     if args.full:
-        out = jsonl.dump_events(Path(s.jsonl_path), since=since)
+        out = engine_mod.dump_events(Path(s.jsonl_path), since=since)
     else:
-        out = jsonl.extract_response(
+        out = engine_mod.extract_response(
             Path(s.jsonl_path), since=since,
             include_thinking=args.include_thinking,
             include_tool_use=args.include_tool_use,
@@ -490,11 +494,14 @@ def _handle_wait(args: argparse.Namespace) -> int:
             print("session JSONL not found; check `oum-worker logs --launchd`", file=sys.stderr)
             return 2
 
+    from oum_worker import engines  # noqa: WPS433
+    engine_mod = engines.get(s.engine or "claude").jsonl_module
+
     def _alive() -> bool:
         return _tmux.window_exists(s.tmux_session, s.tmux_window) or s.mode == "headless"
 
     last_send = s.last_send_at or s.created_at
-    result = jsonl.wait_for_idle(
+    result = engine_mod.wait_for_idle(
         Path(s.jsonl_path), last_send_at=last_send,
         timeout=args.timeout, stable_ms=args.stable_ms, poll_ms=args.poll_ms,
         alive_check=_alive,
