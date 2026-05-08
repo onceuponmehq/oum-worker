@@ -749,3 +749,68 @@ def test_wait_codex_returns_zero_on_task_complete(tmp_path, monkeypatch):
                  "--logs-dir", str(workdir),
                  env={**os.environ, "HOME": str(fake_home)})
     assert r.returncode == 0, r.stderr
+
+
+# ---------- engine-mismatched flag warnings ----------
+
+
+@pytest.mark.skipif(TMUX_BIN is None, reason="tmux required")
+def test_warning_on_engine_mismatched_flag(tmp_path):
+    """`--engine codex --name foo` should succeed but emit a warning."""
+    stub = tmp_path / "stub-codex"
+    stub.write_text('#!/bin/zsh\nsleep 30\n')
+    stub.chmod(0o755)
+    try:
+        r = _run_cli(
+            "spawn",
+            "--label", "cx-warn",
+            "--new",
+            "--engine", "codex",
+            "--name", "ignored-name",
+            "--codex-bin", str(stub),
+            "--tmux-session", TEST_TMUX_SESSION,
+            "--cwd", str(tmp_path),
+            "--logs-dir", str(tmp_path / "logs"),
+        )
+        assert r.returncode == 0, r.stderr
+        assert "ignored for engine=codex" in r.stderr
+        assert "--name" in r.stderr
+    finally:
+        _cleanup_tmux()
+
+
+@pytest.mark.skipif(TMUX_BIN is None, reason="tmux required")
+def test_replace_cross_engine_flips_state(tmp_path):
+    """spawn label=foo engine=claude, then --replace with engine=codex.
+    state.engine flips."""
+    stub_claude = tmp_path / "stub-cc"
+    stub_claude.write_text('#!/bin/zsh\nsleep 30\n')
+    stub_claude.chmod(0o755)
+    stub_codex = tmp_path / "stub-codex"
+    stub_codex.write_text('#!/bin/zsh\nsleep 30\n')
+    stub_codex.chmod(0o755)
+    try:
+        r1 = _run_cli(
+            "spawn", "--label", "swap", "--new",
+            "--prompt", "hi from claude",
+            "--engine", "claude", "--cc-command", str(stub_claude),
+            "--tmux-session", TEST_TMUX_SESSION,
+            "--cwd", str(tmp_path),
+            "--logs-dir", str(tmp_path / "logs"),
+        )
+        assert r1.returncode == 0, r1.stderr
+
+        r2 = _run_cli(
+            "spawn", "--label", "swap", "--new",
+            "--engine", "codex", "--codex-bin", str(stub_codex),
+            "--replace",
+            "--tmux-session", TEST_TMUX_SESSION,
+            "--cwd", str(tmp_path),
+            "--logs-dir", str(tmp_path / "logs"),
+        )
+        assert r2.returncode == 0, r2.stderr
+
+        data = _json.loads((tmp_path / "logs" / "swap" / "state.json").read_text())
+        assert data["engine"] == "codex"
+    finally:
+        _cleanup_tmux()

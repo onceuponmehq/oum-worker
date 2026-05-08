@@ -113,6 +113,30 @@ def _resolve_tmux_session(args: argparse.Namespace,
     return getattr(args, "tmux_session", None) or cfg.tmux_session
 
 
+def _warn_engine_mismatches(args: argparse.Namespace) -> None:
+    """One-line stderr warnings when engine-specific flags don't match
+    the chosen engine. Never fails the command; purely advisory."""
+    eng = args.engine
+    if eng == "codex":
+        if getattr(args, "name", None):
+            print("warning: --name ignored for engine=codex", file=sys.stderr)
+        if getattr(args, "permission_mode", None):
+            print("warning: --permission-mode ignored for engine=codex",
+                  file=sys.stderr)
+        if getattr(args, "skip_permissions", False):
+            print("warning: --dangerously-skip-permissions ignored for "
+                  "engine=codex (use --yolo / --no-yolo)", file=sys.stderr)
+        if getattr(args, "claude_bin", None):
+            print("warning: --cc-command/--claude-bin ignored for engine=codex",
+                  file=sys.stderr)
+    elif eng == "claude":
+        if getattr(args, "model", None):
+            print("warning: --model ignored for engine=claude", file=sys.stderr)
+        if getattr(args, "codex_bin", None):
+            print("warning: --codex-bin ignored for engine=claude",
+                  file=sys.stderr)
+
+
 def _resolve_session_id(workdir: Path, s: state.WorkerState) -> state.WorkerState:
     if s.session_id:
         return s
@@ -216,6 +240,7 @@ def _handle_spawn(args: argparse.Namespace) -> int:
     workdir = workdir_from_args(args)
     cwd = _resolve_cwd(args, cfg)
     engine_binary = _resolve_engine_binary(args, cfg, args.engine)
+    _warn_engine_mismatches(args)
     tmux_session = _resolve_tmux_session(args, cfg)
     prompt = _read_prompt(args)
     if args.headless and not prompt:
@@ -349,6 +374,7 @@ def _handle_schedule(args: argparse.Namespace) -> int:
     workdir = workdir_from_args(args)
     cwd = _resolve_cwd(args, cfg)
     engine_binary = _resolve_engine_binary(args, cfg, args.engine)
+    _warn_engine_mismatches(args)
     tmux_session = _resolve_tmux_session(args, cfg)
     prompt = _read_prompt(args)
     if args.headless and not prompt:
