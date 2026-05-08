@@ -345,3 +345,24 @@ def test_cc_invocation_with_prompt_file_unchanged(tmp_path):
     )
     assert "$(cat" in cmd
     assert str(p) in cmd
+
+
+def test_build_inner_command_interactive_no_prompt(tmp_path):
+    """With prompt_file=None, the inner command runs `claude` with no
+    `$(cat ...)` substitution — cold-start interactive."""
+    cmd = launchd.build_inner_command(
+        cwd=tmp_path,
+        claude_bin="cc",
+        prompt_file=None,
+        log_path=tmp_path / "tmux.log",
+        label="cold",
+        logs_dir=tmp_path / "logs",
+        resume=None, new_session=True, session_name=None,
+        permission_mode=None, skip_permissions=False,
+        tmux_session="oum-worker-test", headless=False,
+    )
+    assert "$(cat" not in cmd
+    # Sanity: cd, mark-started, cc invocation all still present.
+    assert "cd " in cmd
+    assert "mark-started" in cmd
+    assert "cc" in cmd

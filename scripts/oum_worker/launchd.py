@@ -266,7 +266,8 @@ def _env_export_prefix(env_pairs: dict[str, str] | None) -> str:
     return " && ".join(parts) + " && "
 
 
-def build_inner_command(*, cwd: Path, claude_bin: str, prompt_file: Path,
+def build_inner_command(*, cwd: Path, claude_bin: str,
+                        prompt_file: Optional[Path],
                         log_path: Path, label: str, logs_dir: Path,
                         resume: Optional[str], new_session: bool,
                         session_name: Optional[str], permission_mode: Optional[str],
