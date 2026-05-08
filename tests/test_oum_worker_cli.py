@@ -37,7 +37,7 @@ def test_help_lists_all_verbs():
     r = _run_cli("--help")
     assert r.returncode == 0
     for verb in ["spawn", "schedule", "send", "capture", "wait", "ask",
-                 "list", "status", "kill", "logs"]:
+                 "list", "status", "kill", "logs", "attach"]:
         assert verb in r.stdout, f"verb {verb!r} missing from --help: {r.stdout}"
 
 

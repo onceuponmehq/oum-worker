@@ -585,17 +585,19 @@ def _handle_logs(args: argparse.Namespace) -> int:
 # ---------- parser ----------
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="oum-worker",
-                                description="Manage Claude Code worker sessions.")
+    p = argparse.ArgumentParser(
+        prog="oum-worker",
+        description="Manage Claude Code sessions (interactive in tmux or headless).",
+    )
     _add_global(p)
     sub = p.add_subparsers(dest="verb", required=True)
 
-    sp_spawn = sub.add_parser("spawn", help="Start a Claude Code worker now.")
+    sp_spawn = sub.add_parser("spawn", help="Start a Claude Code session now.")
     _add_global(sp_spawn)
     _add_spawn_args(sp_spawn)
     sp_spawn.set_defaults(_handler=_handle_spawn)
 
-    sp_sched = sub.add_parser("schedule", help="Schedule a Claude Code worker for later via launchd.")
+    sp_sched = sub.add_parser("schedule", help="Schedule a Claude Code session for later via launchd.")
     _add_global(sp_sched)
     _add_spawn_args(sp_sched)
     when = sp_sched.add_mutually_exclusive_group(required=True)
