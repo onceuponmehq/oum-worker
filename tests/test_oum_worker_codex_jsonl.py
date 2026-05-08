@@ -87,3 +87,58 @@ def test_discover_by_prompt_returns_none_for_wrong_prompt(tmp_path, monkeypatch)
         real_cwd, "different prompt",
         created_at="2026-05-08T10:00:30.000Z",
     ) is None
+
+
+# ---------- wait_for_idle ----------
+
+
+def test_wait_returns_idle_after_task_complete(tmp_path):
+    """JSONL already has a task_complete after last_send_at; wait_for_idle
+    returns idle once the stable window passes."""
+    jsonl_path = tmp_path / "session.jsonl"
+    jsonl_path.write_text(SIMPLE.read_text(), encoding="utf-8")
+    result = codex_jsonl.wait_for_idle(
+        jsonl_path,
+        last_send_at="2026-05-08T10:00:30.000Z",
+        timeout=2.0, stable_ms=200, poll_ms=50,
+    )
+    assert result.idle is True
+    assert result.timed_out is False
+    assert result.last_stop_reason == "task_complete"
+
+
+def test_wait_times_out_when_no_task_complete(tmp_path):
+    """JSONL has only task_started, no task_complete after last_send_at."""
+    jsonl_path = tmp_path / "session.jsonl"
+    jsonl_path.write_text(
+        '{"timestamp":"2026-05-08T10:00:00.000Z","type":"session_meta","payload":{"id":"x","cwd":"/x"}}\n'
+        '{"timestamp":"2026-05-08T10:01:00.000Z","type":"event_msg","payload":{"type":"task_started"}}\n',
+        encoding="utf-8",
+    )
+    result = codex_jsonl.wait_for_idle(
+        jsonl_path,
+        last_send_at="2026-05-08T10:00:30.000Z",
+        timeout=0.6, stable_ms=200, poll_ms=50,
+    )
+    assert result.idle is False
+    assert result.timed_out is True
+
+
+def test_wait_short_circuits_when_alive_check_false(tmp_path):
+    jsonl_path = tmp_path / "session.jsonl"
+    jsonl_path.write_text("", encoding="utf-8")
+    calls = {"n": 0}
+
+    def alive() -> bool:
+        calls["n"] += 1
+        return False
+
+    result = codex_jsonl.wait_for_idle(
+        jsonl_path,
+        last_send_at="2026-05-08T10:00:30.000Z",
+        timeout=2.0, stable_ms=200, poll_ms=50,
+        alive_check=alive,
+    )
+    assert result.idle is False
+    assert result.timed_out is False
+    assert calls["n"] >= 1

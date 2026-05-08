@@ -154,3 +154,67 @@ def discover_by_prompt(cwd: Path, prompt: str, *, created_at: str,
     if best_delta > tiebreaker_window_seconds and len(candidates) > 1:
         return None
     return best_sid
+
+
+def wait_for_idle(jsonl_path: Path, *, last_send_at: str,
+                  timeout: float = 600.0, stable_ms: int = 1500,
+                  poll_ms: int = 500,
+                  alive_check=lambda: True) -> WaitResult:
+    """Tail jsonl_path until an event_msg with payload.type == 'task_complete'
+    arrives (timestamp > last_send_at) AND the file is quiet for stable_ms.
+
+    `alive_check` is called each tick; return False to short-circuit with
+    idle=False/timed_out=False (caller treats this as 'dead').
+    """
+    deadline = time.monotonic() + timeout
+    stable_s = stable_ms / 1000.0
+    poll_s = poll_ms / 1000.0
+    last_send_dt = _parse_iso_utc(last_send_at)
+    pos = 0
+    last_event_seen = time.monotonic()
+    last_assistant_text = ""
+    last_stop_reason: Optional[str] = None
+    saw_terminal = False
+
+    while True:
+        if not alive_check():
+            return WaitResult(idle=False, timed_out=False,
+                              last_assistant_text=last_assistant_text,
+                              last_stop_reason=last_stop_reason)
+        if not jsonl_path.exists():
+            if time.monotonic() > deadline:
+                return WaitResult(False, True, last_assistant_text, last_stop_reason)
+            time.sleep(poll_s)
+            continue
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            f.seek(pos)
+            for line in f:
+                pos += len(line.encode("utf-8"))
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts = d.get("timestamp")
+                if ts:
+                    last_event_seen = time.monotonic()
+                if d.get("type") != "event_msg":
+                    continue
+                payload = d.get("payload", {})
+                sub = payload.get("type")
+                if not ts or _parse_iso_utc(ts) <= last_send_dt:
+                    continue
+                if sub == "agent_message":
+                    msg = payload.get("message")
+                    if isinstance(msg, str):
+                        last_assistant_text = msg
+                if sub == "task_complete":
+                    last_stop_reason = "task_complete"
+                    last_msg = payload.get("last_agent_message")
+                    if isinstance(last_msg, str) and last_msg:
+                        last_assistant_text = last_msg
+                    saw_terminal = True
+        if saw_terminal and (time.monotonic() - last_event_seen) >= stable_s:
+            return WaitResult(True, False, last_assistant_text, last_stop_reason)
+        if time.monotonic() > deadline:
+            return WaitResult(False, True, last_assistant_text, last_stop_reason)
+        time.sleep(poll_s)
