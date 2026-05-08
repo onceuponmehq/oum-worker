@@ -222,25 +222,24 @@ def _cc_invocation(*, claude_bin: str, resume: Optional[str], new_session: bool,
                    session_name: Optional[str], permission_mode: Optional[str],
                    skip_permissions: bool, prompt_file: Optional[Path],
                    headless: bool) -> str:
-    # Headless mode honors --cc-command but appends -p as the headless flag
-    # (Claude Code's headless invocation is always `<bin> -p ...`).
-    parts: list[str] = [claude_bin] + (["-p"] if headless else [])
-    if resume:
-        parts.extend(["--resume", shlex.quote(resume)])
-    if new_session and session_name and not headless:
-        parts.extend(["--name", shlex.quote(session_name)])
-    if permission_mode:
-        parts.extend(["--permission-mode", shlex.quote(permission_mode)])
-    if skip_permissions:
-        parts.append("--dangerously-skip-permissions")
-    # prompt_file=None is the cold-start interactive path: a human spawned
-    # an interactive session with no --prompt and just wants `claude` to
-    # open in tmux as if they ran it themselves. Skipping the trailing
-    # `"$(cat ...)"` is what makes that work — `claude ""` would otherwise
-    # be passed an empty positional argument.
-    if prompt_file is not None:
-        parts.append(f'"$(cat {shlex.quote(str(prompt_file))})"')
-    return " ".join(parts)
+    """Back-compat shim. Delegates to engines.ClaudeEngine.
+
+    Kept so that other tests and any external consumer that imported
+    this helper continue to work. Local import avoids any chance of an
+    import cycle with the engines module.
+    """
+    from oum_worker import engines  # noqa: WPS433
+    return engines.get("claude").build_invocation(
+        binary=claude_bin,
+        prompt_file=prompt_file,
+        headless=headless,
+        resume=resume,
+        session_name=session_name if new_session else None,
+        model=None,
+        yolo=skip_permissions,
+        permission_mode=permission_mode,
+        cwd=Path.cwd(),  # claude ignores cwd; placeholder
+    )
 
 
 def _env_export_prefix(env_pairs: dict[str, str] | None) -> str:
@@ -274,19 +273,30 @@ def build_inner_command(*, cwd: Path, claude_bin: str,
                         skip_permissions: bool, tmux_session: str,
                         headless: bool,
                         env_pairs: dict[str, str] | None = None,
-                        scripts_dir: Path | None = None) -> str:
+                        scripts_dir: Path | None = None,
+                        engine: str = "claude",
+                        model: Optional[str] = None,
+                        yolo: Optional[bool] = None) -> str:
     """Build the zsh command launchd executes when the job fires.
+
+    `engine` selects which engines.Engine builds the inner CLI invocation.
+    `yolo=None` means "use the engine's default" (claude=False, codex=True);
+    pass False explicitly to disable yolo for codex. `skip_permissions=True`
+    is back-compat for claude callers and forces yolo on regardless.
 
     Steps inside the command (in order):
     1. export user-supplied env vars (if any).
     2. cd to cwd.
     3. python3 -m oum_worker.runner mark-started --label <L>   (writes started_at)
     4a. interactive: open a tmux window running cc.
-    4b. headless:    run `claude -p ...` with stdout to <logs_dir>/<label>/response.txt.
-
-    Exports come first so any cd-side hooks (chpwd, direnv, etc.) see the
-    new env.
+    4b. headless:    run `<engine> ...` with stdout to <logs_dir>/<label>/response.txt.
     """
+    from oum_worker import engines as _engines  # noqa: WPS433
+    eng = _engines.get(engine)
+    effective_yolo = eng.yolo_default if yolo is None else yolo
+    if skip_permissions:
+        effective_yolo = True
+
     # PYTHONPATH lets `python3 -m oum_worker.runner` resolve from any cwd —
     # without it, the launchd inner command would die with ModuleNotFoundError
     # because we cd into the worker's cwd before running this.
@@ -296,10 +306,16 @@ def build_inner_command(*, cwd: Path, claude_bin: str,
         f"--label {shlex.quote(label)} "
         f"--logs-dir {shlex.quote(str(logs_dir))}"
     )
-    cc = _cc_invocation(
-        claude_bin=claude_bin, resume=resume, new_session=new_session,
-        session_name=session_name, permission_mode=permission_mode,
-        skip_permissions=skip_permissions, prompt_file=prompt_file, headless=headless,
+    cc = eng.build_invocation(
+        binary=claude_bin,
+        prompt_file=prompt_file,
+        headless=headless,
+        resume=resume,
+        session_name=session_name if new_session else None,
+        model=model,
+        yolo=effective_yolo,
+        permission_mode=permission_mode,
+        cwd=cwd,
     )
     exports = _env_export_prefix(env_pairs)
     if headless:

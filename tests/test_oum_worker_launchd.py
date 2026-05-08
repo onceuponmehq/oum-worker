@@ -366,3 +366,62 @@ def test_build_inner_command_interactive_no_prompt(tmp_path):
     assert "cd " in cmd
     assert "mark-started" in cmd
     assert "cc" in cmd
+
+
+def test_cc_invocation_still_works_via_engines(tmp_path):
+    """_cc_invocation kept as a back-compat shim; result equals what the
+    Claude engine produces."""
+    from oum_worker import engines as _engines
+    p = tmp_path / "p.md"
+    cmd_legacy = launchd._cc_invocation(
+        claude_bin="claude", resume=None, new_session=True,
+        session_name=None, permission_mode=None,
+        skip_permissions=False, prompt_file=p, headless=False,
+    )
+    cmd_engine = _engines.get("claude").build_invocation(
+        binary="claude", prompt_file=p, headless=False,
+        resume=None, session_name=None, model=None,
+        yolo=False, permission_mode=None, cwd=tmp_path,
+    )
+    assert cmd_legacy == cmd_engine
+
+
+def test_build_inner_command_codex_uses_codex_engine(tmp_path):
+    cmd = launchd.build_inner_command(
+        cwd=tmp_path / "work",
+        claude_bin="codex",
+        prompt_file=None,
+        log_path=tmp_path / "tmux.log",
+        label="cx-int",
+        logs_dir=tmp_path / "logs",
+        resume=None, new_session=True, session_name=None,
+        permission_mode=None, skip_permissions=False,
+        tmux_session="oum-worker-test", headless=False,
+        engine="codex",
+    )
+    assert "--yolo" in cmd
+    assert "$(cat" not in cmd
+    assert "mark-started" in cmd
+    # The inner pipeline must run mark-started BEFORE the codex binary
+    # invocation. Use ' && codex --yolo' as the binary marker because
+    # pytest's tmpdir path can contain 'codex' (the test name) which
+    # would otherwise pollute string searches.
+    assert " && codex " in cmd
+    assert cmd.index("mark-started") < cmd.rindex(" && codex ")
+
+
+def test_build_inner_command_codex_no_yolo(tmp_path):
+    cmd = launchd.build_inner_command(
+        cwd=tmp_path / "work",
+        claude_bin="codex",
+        prompt_file=tmp_path / "p.md",
+        log_path=tmp_path / "tmux.log",
+        label="cx-noyolo",
+        logs_dir=tmp_path / "logs",
+        resume=None, new_session=True, session_name=None,
+        permission_mode=None, skip_permissions=False,
+        tmux_session="oum-worker-test", headless=False,
+        engine="codex",
+        yolo=False,
+    )
+    assert "--yolo" not in cmd
