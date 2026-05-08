@@ -218,3 +218,80 @@ def wait_for_idle(jsonl_path: Path, *, last_send_at: str,
         if time.monotonic() > deadline:
             return WaitResult(False, True, last_assistant_text, last_stop_reason)
         time.sleep(poll_s)
+
+
+def _truncate(s: str, n: int) -> str:
+    if len(s) <= n:
+        return s
+    return s[:n] + "...(truncated)"
+
+
+def extract_response(jsonl_path: Path, *, since: str,
+                     include_thinking: bool = False,
+                     include_tool_use: bool = False) -> str:
+    """Concatenate text from agent_message events after `since`.
+
+    With include_tool_use, also emit [tool_use ...] for response_item
+    function_call and [tool_result ...] for function_call_output.
+    With include_thinking, emit [thinking] <summary> for reasoning
+    events with a non-empty summary, or [thinking encrypted] when
+    only encrypted_content is present.
+    """
+    if not jsonl_path.exists():
+        return ""
+    since_dt = _parse_iso_utc(since)
+    parts: list[str] = []
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = d.get("timestamp")
+            if not ts or _parse_iso_utc(ts) <= since_dt:
+                continue
+            t = d.get("type")
+            payload = d.get("payload", {}) or {}
+            sub = payload.get("type")
+            if t == "event_msg" and sub == "agent_message":
+                msg = payload.get("message")
+                if isinstance(msg, str):
+                    parts.append(msg)
+            elif t == "response_item" and sub == "reasoning" and include_thinking:
+                summary = payload.get("summary") or []
+                if isinstance(summary, list) and summary:
+                    for entry in summary:
+                        if isinstance(entry, dict):
+                            text = entry.get("text", "")
+                            if text:
+                                parts.append(f"[thinking] {text}")
+                elif payload.get("encrypted_content"):
+                    parts.append("[thinking encrypted]")
+            elif t == "response_item" and sub == "function_call" and include_tool_use:
+                name = payload.get("name", "?")
+                args = payload.get("arguments", "")
+                parts.append(f"[tool_use {name} {_truncate(args, 500)}]")
+            elif t == "response_item" and sub == "function_call_output" and include_tool_use:
+                output = payload.get("output", "")
+                if isinstance(output, str):
+                    parts.append(f"[tool_result {_truncate(output, 500)}]")
+    return "".join(parts).strip()
+
+
+def dump_events(jsonl_path: Path, *, since: str) -> str:
+    """Return raw JSONL events with timestamp > since, one per line."""
+    if not jsonl_path.exists():
+        return ""
+    since_dt = _parse_iso_utc(since)
+    out_lines: list[str] = []
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = d.get("timestamp")
+            if not ts or _parse_iso_utc(ts) <= since_dt:
+                continue
+            out_lines.append(line.rstrip("\n"))
+    return "\n".join(out_lines)

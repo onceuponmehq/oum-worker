@@ -142,3 +142,54 @@ def test_wait_short_circuits_when_alive_check_false(tmp_path):
     assert result.idle is False
     assert result.timed_out is False
     assert calls["n"] >= 1
+
+
+# ---------- extract_response / dump_events ----------
+
+
+def test_extract_response_text_only():
+    """Default: agent_message text concatenated, after `since`."""
+    out = codex_jsonl.extract_response(
+        SIMPLE, since="2026-05-08T10:00:30.000Z",
+    )
+    assert out == "Hi there!"
+
+
+def test_extract_response_with_tool_use():
+    out = codex_jsonl.extract_response(
+        WITH_TOOLS, since="2026-05-08T10:00:30.000Z",
+        include_tool_use=True,
+    )
+    assert "Found 2 files." in out
+    assert "[tool_use exec_command" in out
+    assert "ls -la" in out
+    assert "[tool_result" in out
+    assert "file1.txt" in out
+
+
+def test_extract_response_with_thinking_renders_summary_and_encrypted():
+    out = codex_jsonl.extract_response(
+        WITH_TOOLS, since="2026-05-08T10:00:30.000Z",
+        include_thinking=True,
+    )
+    assert "[thinking] need to list dir" in out
+    assert "[thinking encrypted]" in out
+
+
+def test_extract_response_skips_events_at_or_before_since():
+    """agent_message at 10:01:30 exactly should be excluded when
+    since == 10:01:30."""
+    out = codex_jsonl.extract_response(
+        SIMPLE, since="2026-05-08T10:01:30.000Z",
+    )
+    assert out == ""
+
+
+def test_dump_events_emits_lines_after_since():
+    out = codex_jsonl.dump_events(
+        SIMPLE, since="2026-05-08T10:00:30.000Z",
+    )
+    lines = out.split("\n")
+    # task_started, user_message, agent_message, task_complete = 4 lines
+    assert len(lines) == 4
+    assert all('"timestamp"' in line for line in lines)
