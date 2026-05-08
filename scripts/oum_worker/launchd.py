@@ -220,7 +220,8 @@ def unbootstrap(label: str) -> None:
 
 def _cc_invocation(*, claude_bin: str, resume: Optional[str], new_session: bool,
                    session_name: Optional[str], permission_mode: Optional[str],
-                   skip_permissions: bool, prompt_file: Path, headless: bool) -> str:
+                   skip_permissions: bool, prompt_file: Optional[Path],
+                   headless: bool) -> str:
     # Headless mode honors --cc-command but appends -p as the headless flag
     # (Claude Code's headless invocation is always `<bin> -p ...`).
     parts: list[str] = [claude_bin] + (["-p"] if headless else [])
@@ -232,7 +233,13 @@ def _cc_invocation(*, claude_bin: str, resume: Optional[str], new_session: bool,
         parts.extend(["--permission-mode", shlex.quote(permission_mode)])
     if skip_permissions:
         parts.append("--dangerously-skip-permissions")
-    parts.append(f'"$(cat {shlex.quote(str(prompt_file))})"')
+    # prompt_file=None is the cold-start interactive path: a human spawned
+    # an interactive session with no --prompt and just wants `claude` to
+    # open in tmux as if they ran it themselves. Skipping the trailing
+    # `"$(cat ...)"` is what makes that work — `claude ""` would otherwise
+    # be passed an empty positional argument.
+    if prompt_file is not None:
+        parts.append(f'"$(cat {shlex.quote(str(prompt_file))})"')
     return " ".join(parts)
 
 

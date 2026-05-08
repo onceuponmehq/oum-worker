@@ -305,3 +305,43 @@ def test_build_inner_command_headless_exports_env_before_cd(tmp_path):
     )
     cd_token = f"cd {tmp_path / 'work'}"
     assert cmd.index("export OUM_TASK_ID=2026-05-06-002") < cmd.index(cd_token)
+
+
+# --- Optional prompt_file (cold-start interactive) ----------------------------
+
+
+def test_cc_invocation_omits_prompt_when_none():
+    """With prompt_file=None, the resulting command has no `$(cat ...)` arg.
+
+    Cold-start interactive: `claude` runs with no initial message, exactly
+    like a user typing `claude` by hand.
+    """
+    cmd = launchd._cc_invocation(
+        claude_bin="claude",
+        resume=None,
+        new_session=True,
+        session_name=None,
+        permission_mode=None,
+        skip_permissions=False,
+        prompt_file=None,
+        headless=False,
+    )
+    assert "$(cat" not in cmd
+    assert cmd.strip() == "claude"
+
+
+def test_cc_invocation_with_prompt_file_unchanged(tmp_path):
+    """Existing behaviour: prompt_file=<path> still produces `$(cat <path>)`."""
+    p = tmp_path / "prompt.md"
+    cmd = launchd._cc_invocation(
+        claude_bin="claude",
+        resume=None,
+        new_session=True,
+        session_name=None,
+        permission_mode=None,
+        skip_permissions=False,
+        prompt_file=p,
+        headless=False,
+    )
+    assert "$(cat" in cmd
+    assert str(p) in cmd
