@@ -78,6 +78,36 @@ def _resolve_claude_bin(args: argparse.Namespace,
     return getattr(args, "claude_bin", None) or cfg.claude_bin
 
 
+def _resolve_engine_binary(args: argparse.Namespace,
+                           cfg: worker_config.WorkerConfig,
+                           engine_name: str) -> str:
+    """Pick the right binary for the engine.
+
+    For engine='claude', honors --cc-command/--claude-bin then config.
+    For engine='codex', honors --codex-bin then config.codex_bin.
+    """
+    if engine_name == "claude":
+        return getattr(args, "claude_bin", None) or cfg.claude_bin
+    if engine_name == "codex":
+        return getattr(args, "codex_bin", None) or cfg.codex_bin
+    raise ValueError(f"unknown engine {engine_name!r}")
+
+
+def _verify_binary_exists(binary: str, engine_name: str) -> Optional[str]:
+    """Return None if the binary is found; else an error string ready to
+    print to stderr. Treats any value containing '/' as a literal path
+    (must exist); else looks up via shutil.which."""
+    if "/" in binary:
+        if Path(binary).exists():
+            return None
+        return (f"error: {engine_name} binary not found at {binary!r} "
+                f"(install {engine_name} or pass --{engine_name}-bin)")
+    if _shutil.which(binary):
+        return None
+    return (f"error: {engine_name} binary {binary!r} not on PATH "
+            f"(install {engine_name} or pass --{engine_name}-bin)")
+
+
 def _resolve_tmux_session(args: argparse.Namespace,
                           cfg: worker_config.WorkerConfig) -> str:
     return getattr(args, "tmux_session", None) or cfg.tmux_session
@@ -142,6 +172,22 @@ def _add_spawn_args(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--cwd")
     sp.add_argument("--name", help="Claude session name (interactive only)")
     sp.add_argument("--cc-command", "--claude-bin", dest="claude_bin", default=None)
+    sp.add_argument("--engine", choices=["claude", "codex"], default="claude",
+                    help="Which engine to spawn (default: claude).")
+    sp.add_argument("--codex-bin", dest="codex_bin", default=None,
+                    help="Path to codex binary (used when --engine codex).")
+    sp.add_argument("--model", default=None,
+                    help="Model name (codex -m; ignored for claude).")
+    yolo_group = sp.add_mutually_exclusive_group()
+    yolo_group.add_argument(
+        "--yolo", dest="yolo", action="store_true", default=None,
+        help=("Bypass approvals (claude: --dangerously-skip-permissions; "
+              "codex: --yolo). Default off for claude, on for codex."),
+    )
+    yolo_group.add_argument(
+        "--no-yolo", dest="yolo", action="store_false",
+        help="Disable yolo (relevant for codex).",
+    )
     sp.add_argument("--permission-mode",
                     choices=["acceptEdits", "auto", "bypassPermissions",
                              "default", "dontAsk", "plan"])
