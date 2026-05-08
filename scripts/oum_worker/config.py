@@ -18,6 +18,7 @@ DEFAULT_LABEL_PREFIX = "com.agentworker.schedule."
 DEFAULT_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 DEFAULT_TMUX_SESSION = "workers"
 DEFAULT_CLAUDE_BIN = "claude"
+DEFAULT_CODEX_BIN = "codex"
 DEFAULT_TIMEZONE = "UTC"
 
 
@@ -68,6 +69,7 @@ class WorkerConfig:
     logs_dir: Path
     tmux_session: str
     claude_bin: str
+    codex_bin: str
     timezone: str
     launchd_label_prefix: str
     path: str
@@ -82,6 +84,7 @@ class WorkerConfig:
             logs_dir=(cwd / ".logs" / "oum-worker").resolve(),
             tmux_session=DEFAULT_TMUX_SESSION,
             claude_bin=DEFAULT_CLAUDE_BIN,
+            codex_bin=DEFAULT_CODEX_BIN,
             timezone=_validate_timezone(os.environ.get("TZ") or DEFAULT_TIMEZONE),
             launchd_label_prefix=DEFAULT_LABEL_PREFIX,
             path=DEFAULT_PATH,
@@ -105,6 +108,8 @@ def _apply_file_config(cfg: WorkerConfig, data: dict[str, Any], *, base: Path) -
         changes["tmux_session"] = str(data["tmux_session"])
     if "claude_bin" in data:
         changes["claude_bin"] = str(data["claude_bin"])
+    if "codex_bin" in data:
+        changes["codex_bin"] = str(data["codex_bin"])
     if "timezone" in data:
         changes["timezone"] = str(data["timezone"])
     if "launchd_label_prefix" in data:
@@ -134,6 +139,7 @@ def _apply_env_config(cfg: WorkerConfig) -> WorkerConfig:
     string_keys = {
         "OUM_WORKER_TMUX_SESSION": "tmux_session",
         "OUM_WORKER_CLAUDE_BIN": "claude_bin",
+        "OUM_WORKER_CODEX_BIN": "codex_bin",
         "OUM_WORKER_TIMEZONE": "timezone",
         "OUM_WORKER_LAUNCHD_LABEL_PREFIX": "launchd_label_prefix",
         "OUM_WORKER_PATH": "path",

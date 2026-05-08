@@ -90,3 +90,21 @@ def test_public_repo_metadata_exists():
         "configs/oum-worker.example.json",
     ]:
         assert (ROOT / rel).exists(), f"missing public metadata file: {rel}"
+
+
+def test_codex_bin_default_is_codex():
+    cfg = config.WorkerConfig.defaults()
+    assert cfg.codex_bin == "codex"
+
+
+def test_codex_bin_loaded_from_json(tmp_path):
+    p = tmp_path / "cfg.json"
+    p.write_text(json.dumps({"codex_bin": "/opt/codex/bin/codex"}))
+    cfg = config.load_config(p)
+    assert cfg.codex_bin == "/opt/codex/bin/codex"
+
+
+def test_codex_bin_loaded_from_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUM_WORKER_CODEX_BIN", "/usr/local/bin/codex")
+    cfg = config.load_config(None)
+    assert cfg.codex_bin == "/usr/local/bin/codex"
