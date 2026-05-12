@@ -167,6 +167,31 @@ def test_codex_invocation_headless_resume_uses_exec_resume():
     assert "codex exec resume abc-123" in cmd
 
 
+def test_codex_invocation_resume_omits_cwd_flag():
+    """`codex exec resume` rejects -C <cwd>; resumed sessions inherit the
+    original session's cwd from session_meta. The builder must NOT pass -C
+    when resume is set, even though it does for fresh `codex exec` spawns.
+    """
+    cmd_resume = engines.get("codex").build_invocation(
+        binary="codex",
+        prompt_file=None, headless=False,
+        resume="abc-123", session_name=None, model=None,
+        yolo=True, permission_mode=None, cwd=Path("/tmp/xyz"),
+    )
+    assert "-C" not in cmd_resume, cmd_resume
+    assert "/tmp/xyz" not in cmd_resume, cmd_resume
+
+    # Sanity: fresh spawn DOES still pass -C.
+    cmd_fresh = engines.get("codex").build_invocation(
+        binary="codex",
+        prompt_file=None, headless=False,
+        resume=None, session_name=None, model=None,
+        yolo=True, permission_mode=None, cwd=Path("/tmp/xyz"),
+    )
+    assert "-C" in cmd_fresh, cmd_fresh
+    assert "/tmp/xyz" in cmd_fresh, cmd_fresh
+
+
 def test_codex_invocation_model_passes_m_flag():
     cmd = engines.get("codex").build_invocation(
         binary="codex",

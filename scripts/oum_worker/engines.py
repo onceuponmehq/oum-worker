@@ -60,13 +60,19 @@ def _codex_build(*, binary: str, prompt_file: Optional[Path],
                  cwd: Path) -> str:
     """Codex CLI shape:
 
-      codex [exec] [resume <sid>] [--yolo] [-m model] -C <cwd> ["$(cat prompt)"]
+      codex [exec] [resume <sid>] [--yolo] [-m model] [-C <cwd>] ["$(cat prompt)"]
 
     `resume` is a subcommand for codex (not a flag) and must precede
     the flag list. Headless uses the `exec` subcommand. session_name
     and permission_mode are silently ignored (claude-only concepts);
     the CLI emits a one-line warning at spawn time when those flags
     are explicitly passed for engine=codex.
+
+    Note: `codex exec resume` does NOT accept `-C <cwd>`. The resumed
+    session uses the cwd recorded at the original spawn (in the codex
+    session_meta payload). We therefore omit -C on resume to avoid
+    "unexpected argument '-C'" failures. For fresh `codex` / `codex exec`,
+    -C is required so the agent operates against the right tree.
     """
     if headless and prompt_file is None:
         raise ValueError("codex headless requires a prompt")
@@ -80,7 +86,10 @@ def _codex_build(*, binary: str, prompt_file: Optional[Path],
         parts.append("--yolo")
     if model:
         parts.extend(["-m", shlex.quote(model)])
-    parts.extend(["-C", shlex.quote(str(cwd))])
+    # `-C <cwd>` is rejected by `codex exec resume`; only pass on fresh spawns.
+    # Codex resume picks up cwd from the original session's session_meta.
+    if not resume:
+        parts.extend(["-C", shlex.quote(str(cwd))])
     if prompt_file is not None:
         parts.append(f'"$(cat {shlex.quote(str(prompt_file))})"')
     return " ".join(parts)
